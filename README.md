@@ -17,7 +17,7 @@ This project started as my B.Sc. thesis in Geomatics Engineering (GIS), where th
 </p>
 
 <p align="center">
-  <a href="https://vrp-demo.vercel.app"><strong>Live demo</strong></a>
+  <a href="https://vrp-demo-phi.vercel.app"><strong>Live demo</strong></a>
   &nbsp;·&nbsp;
   <strong>Original thesis:</strong> <em>PDF link to be added</em>
 </p>
