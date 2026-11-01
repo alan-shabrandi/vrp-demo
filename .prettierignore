@@ -1,0 +1,21 @@
+# Build artifacts
+.next
+out
+build
+dist
+coverage
+
+# Dependencies
+node_modules
+
+# Generated
+next-env.d.ts
+*.tsbuildinfo
+
+# Docs — format separately in phase 8
+*.md
+
+# Lockfiles
+package-lock.json
+pnpm-lock.yaml
+yarn.lock

@@ -1,0 +1,86 @@
+.leaflet-container {
+  background: var(--color-bg) !important;
+  font-family: var(--font-sans) !important;
+}
+
+/* Mild filter pulls Esri tiles closer to the app background */
+.leaflet-tile-pane {
+  filter: brightness(0.72) contrast(1.08) saturate(0.75);
+}
+
+.leaflet-control-attribution {
+  background: rgba(10, 11, 15, 0.85) !important;
+  color: var(--color-fg-muted) !important;
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  font-family: var(--font-mono) !important;
+  font-size: 10px !important;
+  padding: 2px 8px !important;
+  border-radius: 6px !important;
+}
+.leaflet-control-attribution a {
+  color: var(--color-route-ga) !important;
+}
+
+.leaflet-bar {
+  border: 1px solid var(--color-border) !important;
+  background: rgba(16, 18, 24, 0.9) !important;
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border-radius: var(--radius-card) !important;
+  overflow: hidden;
+  box-shadow: 0 8px 32px rgba(0, 0, 0, 0.4) !important;
+}
+.leaflet-bar a {
+  background: transparent !important;
+  color: var(--color-fg) !important;
+  border-bottom: 1px solid var(--color-border) !important;
+  width: 34px !important;
+  height: 34px !important;
+  line-height: 34px !important;
+  font-size: 18px !important;
+  transition:
+    background 150ms,
+    color 150ms;
+}
+.leaflet-bar a:hover {
+  background: var(--color-surface-hover) !important;
+  color: var(--color-route-ga) !important;
+}
+.leaflet-bar a:last-child {
+  border-bottom: none !important;
+}
+
+.leaflet-popup-content-wrapper {
+  background: var(--color-bg-elevated) !important;
+  color: var(--color-fg) !important;
+  border: 1px solid var(--color-border-strong) !important;
+  border-radius: 12px !important;
+  box-shadow: 0 12px 40px rgba(0, 0, 0, 0.6) !important;
+  padding: 0 !important;
+}
+.leaflet-popup-content {
+  margin: 12px 14px !important;
+  font-family: var(--font-sans) !important;
+  font-size: 12px !important;
+  line-height: 1.4 !important;
+}
+.leaflet-popup-tip {
+  background: var(--color-bg-elevated) !important;
+  border: 1px solid var(--color-border-strong) !important;
+  box-shadow: none !important;
+}
+.leaflet-popup-close-button {
+  color: var(--color-fg-muted) !important;
+  font-size: 20px !important;
+  padding: 6px 10px !important;
+  transition: color 150ms;
+}
+.leaflet-popup-close-button:hover {
+  color: var(--color-fg) !important;
+  background: transparent !important;
+}
+/* Leaflet sets higher-specificity color on the anchor; this wins */
+.leaflet-container a.leaflet-popup-close-button {
+  color: var(--color-fg-muted) !important;
+}
