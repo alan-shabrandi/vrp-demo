@@ -1,17 +1,13 @@
 # vrp-solver
 
-[![PyPI version](https://img.shields.io/pypi/v/vrp-solver.svg)](https://pypi.org/project/vrp-solver/)
+[![PyPI](https://img.shields.io/pypi/v/vrp-solver.svg)](https://pypi.org/project/vrp-solver/)
 [![Python versions](https://img.shields.io/pypi/pyversions/vrp-solver.svg)](https://pypi.org/project/vrp-solver/)
 [![CI](https://github.com/alan-shabrandi/vrp-demo/actions/workflows/python-solver.yml/badge.svg)](https://github.com/alan-shabrandi/vrp-demo/actions/workflows/python-solver.yml)
-[![tests](https://img.shields.io/badge/tests-36%20passing-brightgreen)](https://github.com/alan-shabrandi/vrp-demo/tree/main/packages/vrp-solver/tests)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](./LICENSE)
-[![Live Demo](https://img.shields.io/badge/demo-vrp--demo--phi.vercel.app-4f9eff)](https://vrp-demo-phi.vercel.app)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](https://github.com/alan-shabrandi/vrp-demo/blob/main/LICENSE)
 
-A standalone Python implementation of a **Genetic Algorithm** for the **Vehicle Routing Problem** (open VRP with fixed start and end points).
+A genetic algorithm for the open Vehicle Routing Problem: one vehicle, a fixed start, a fixed end, and any number of stops in between.
 
-This package is the Python counterpart to my [vrp-demo web application](https://vrp-demo-phi.vercel.app), and is **validated bit-exactly** against the TypeScript implementation there using shared golden test vectors. For the same seed and inputs, both versions produce identical routes, fitness values, and convergence histories.
-
-The algorithm originates from my BSc thesis in Geomatics Engineering (GIS), where it was implemented in Python. The web demo later reimplemented it in TypeScript for visualization; this package brings the algorithm back to Python as a reusable, installable library.
+I wrote the algorithm in Python for my B.Sc. thesis in Geomatics Engineering (GIS). I later ported it to TypeScript for the [web demo](https://vrp-demo-phi.vercel.app), and this package is the Python version as an installable library. The two implementations are checked against each other with golden tests: for the same seed and input, they produce the same route, fitness and convergence history.
 
 ## Install
 
@@ -19,15 +15,17 @@ The algorithm originates from my BSc thesis in Geomatics Engineering (GIS), wher
 pip install vrp-solver
 ```
 
-Or with `uv`:
+or with `uv`:
 
 ```bash
 uv add vrp-solver
 ```
 
-## Quick start (CLI)
+Python 3.10 or newer.
 
-Save a problem definition to `problem.json`:
+## Command line
+
+Save a problem to `problem.json`:
 
 ```json
 {
@@ -49,15 +47,21 @@ Save a problem definition to `problem.json`:
 }
 ```
 
-Then:
+Run it:
 
 ```bash
 vrp-solver problem.json
 ```
 
-The output is a JSON object with three keys: `ga` (the evolved route), `baseline` (a greedy nearest-neighbor comparison), and `improvementPercent` (how much better the GA is, clamped to `[0, 1]`).
+The output is JSON with three keys:
 
-## Quick start (Python API)
+- `ga`: the route found by the genetic algorithm
+- `baseline`: a nearest-neighbor route for comparison
+- `improvementPercent`: how much shorter the GA route is than the baseline, as a fraction between 0 and 1 (`0.0856` means 8.56%)
+
+The input and output are the same as the `POST /api/optimize` endpoint of the web demo.
+
+## Python API
 
 ```python
 from vrp_solver import Point, GAConfig, solve_ga, solve_nearest_neighbor, compute_improvement
@@ -82,79 +86,83 @@ config = GAConfig(
 ga = solve_ga(points, config)
 baseline = solve_nearest_neighbor(points, config)
 
-print(ga.sequence)                # ['start', 's2', 's1', 'end']
-print(ga.fitness)                 # total distance in meters
-print(ga.history[-1].best)        # final best fitness
+print(ga.sequence)            # visit order, e.g. ['start', 's2', 's1', 'end']
+print(ga.fitness)             # total distance in meters
+print(ga.history[-1].best)    # best fitness in the last generation
 print(compute_improvement(baseline.fitness, ga.fitness))
 ```
 
-## What it does
+The config fields are camelCase on purpose, so the same names work in the Python API, the CLI's JSON and the web API.
 
-- **Problem formulation:** open VRP with a fixed start, a fixed end, and any number of intermediate stops.
-- **Chromosome:** a permutation of stop IDs only. Start and end are fixed wrappers, so the search space is `n!` for `n` stops instead of `(n+2)!`.
-- **Initial population:** shuffled permutations.
+## How it works
+
+- **Chromosome:** a permutation of the stop IDs. Start and end are added around it when a route is evaluated, so for `n` stops the search space is `n!`.
+- **Initial population:** random permutations.
 - **Selection:** k-way tournament.
-- **Crossover:** Order Crossover (OX), which always produces a valid permutation — no repair step required.
-- **Mutation:** swap mutation, applied per offspring at the configured rate.
-- **Elitism:** the top `elitismCount` individuals survive unchanged, guaranteeing monotonic non-increasing best fitness.
-- **Fitness:** total Haversine distance, or total time at a constant 40 km/h.
+- **Crossover:** order crossover (OX). Children are always valid permutations, so no repair step is needed.
+- **Mutation:** swap two stops, applied to each offspring with the configured probability.
+- **Elitism:** the best `elitismCount` individuals pass to the next generation unchanged, so the best fitness never gets worse.
+- **Fitness:** total haversine distance, or total time at a constant 40 km/h. Because the speed is constant, both objectives pick the same route; only the reported numbers differ.
 
-## Determinism
+The baseline is nearest-neighbor: from the current point, always go to the closest unvisited stop. I haven't compared the GA against 2-opt or OR-Tools.
 
-Pass an integer `randomSeed` and the run becomes fully reproducible — same seed, same points, same config, **same route** — across machines, Python versions, and repeated calls.
+## Reproducible runs
 
-This is not an accident: the RNG is a bit-exact port of `mulberry32` as used in the TypeScript reference implementation, and the golden test suite (`tests/test_cross_validation.py`) asserts that both implementations produce identical sequences and fitness values for a fixed scenario. This makes the package safe to use for benchmarking and regression testing.
+Pass an integer `randomSeed` and the run is repeatable: same points, same config and same seed give the same route. Leave it out and each run uses a different random sequence.
 
-## Validation
+The random generator is a line-by-line port of the `mulberry32` function in the TypeScript version. `tests/test_cross_validation.py` runs a fixed scenario with a fixed seed and compares the sequence, fitness values and history with results produced by the TypeScript implementation. If you change the algorithm in either language, update the golden values and run both test suites.
 
-All inputs are validated with Pydantic:
+## Input validation
 
-- Points: `id` (non-empty string), `lat` in `[-90, 90]`, `lng` in `[-180, 180]`, `role` in `{start, stop, end}`.
-- Point set: between 3 and 25 points, exactly one `start`, exactly one `end`, no duplicate IDs.
-- Config: every numeric field checked against its documented bounds; `elitismCount <= populationSize`.
+Inputs are validated with Pydantic, and invalid input raises `ValidationError` with a message that says what is wrong.
 
-Invalid input raises `ValidationError` with a descriptive message.
+- Each point needs a non-empty `id`, a `lat` in `[-90, 90]`, a `lng` in `[-180, 180]` and a `role` of `start`, `stop` or `end`.
+- A problem has between 3 and 25 points, exactly one `start`, exactly one `end` and no duplicate IDs.
+- Every numeric config field must be within its allowed range, and `elitismCount` must be smaller than `populationSize`.
 
-## Testing
+## Limits
+
+- One vehicle, one trip.
+- Distance is straight-line haversine, and time is a constant-speed estimate. There is no road network or traffic.
+- At most 25 points.
+
+## Development
 
 ```bash
-uv run pytest -v
+git clone https://github.com/alan-shabrandi/vrp-demo
+cd vrp-demo/packages/vrp-solver
+uv sync
 ```
 
-36 tests covering Haversine math, OX permutation invariants, mutation invariants, tournament selection, GA pipeline structure, monotonic convergence, Pydantic validation, and cross-validation against the TypeScript implementation.
-
-The suite is split across 7 files:
-
-| File | What it covers |
+| Command | What it does |
 | --- | --- |
-| `test_rng.py` | Mulberry32 output matches the TypeScript implementation bit-exactly. |
-| `test_distance.py` | Haversine symmetry, accuracy, sequence evaluation, improvement clamping. |
-| `test_operators.py` | OX validity, swap mutation invariants, tournament determinism. |
-| `test_ga.py` | Sequence validity, monotonic history, seed-based determinism, edge cases. |
-| `test_nearest_neighbor.py` | Baseline sequence validity and determinism. |
-| `test_validation.py` | Pydantic schemas for happy path and error cases. |
-| `test_cross_validation.py` | **Golden tests**: same seed → identical routes, fitness, history. |
+| `uv run pytest -v` | Run the tests |
+| `uv run ruff check src/ tests/` | Lint |
+| `uv run ruff format --check src/ tests/` | Check formatting |
+| `uv run mypy src/` | Type check (strict) |
 
-## What this package is not
+The tests cover haversine distance, the GA operators, the GA pipeline (valid sequences, non-increasing best fitness, determinism for a fixed seed), validation and the cross-validation against the TypeScript version. CI runs lint, type check and tests whenever something under `packages/vrp-solver/` changes.
 
-- **Not multi-vehicle.** One vehicle, one trip, fixed start and end.
-- **Not a real-traffic router.** Distance is Haversine; time assumes a constant 40 km/h.
-- **Not a benchmark against OR-Tools.** The baseline is deliberately simple (nearest-neighbor).
+## Releasing
 
-## Related documentation
+For maintainers. You need a PyPI API token.
 
-This package is one piece of a larger project. For the full context:
+```bash
+cd packages/vrp-solver
+# 1. Bump the version in pyproject.toml
+uv sync
+uv run pytest -v                  # 2. tests must pass
+uv run python -m build            # 3. builds the .whl and .tar.gz in dist/
+uv run twine check dist/*         # 4. checks the files before upload
+uv run twine upload dist/*        # 5. uploads to PyPI
+```
 
-- **[`docs/PROVENANCE.md`](https://github.com/alan-shabrandi/vrp-demo/blob/main/docs/PROVENANCE.md)** — the lineage from thesis (Python) → web demo (TypeScript) → this package (Python), and how cross-validation works.
-- **[`ARCHITECTURE.md`](https://github.com/alan-shabrandi/vrp-demo/blob/main/ARCHITECTURE.md)** — the layered model of the TypeScript reference implementation.
-- **[Main README](https://github.com/alan-shabrandi/vrp-demo)** — the web demo, its 81 Vitest tests, and the full stack.
+## More
 
-## Links
-
-- **Web demo:** [vrp-demo-phi.vercel.app](https://vrp-demo-phi.vercel.app)
-- **Source:** [github.com/alan-shabrandi/vrp-demo](https://github.com/alan-shabrandi/vrp-demo) (the `packages/vrp-solver/` directory)
-- **PyPI:** [pypi.org/project/vrp-solver](https://pypi.org/project/vrp-solver/)
+- [Main repository and web demo](https://github.com/alan-shabrandi/vrp-demo)
+- [`docs/PROVENANCE.md`](https://github.com/alan-shabrandi/vrp-demo/blob/main/docs/PROVENANCE.md): how the project went from thesis to web demo to package
+- [`ARCHITECTURE.md`](https://github.com/alan-shabrandi/vrp-demo/blob/main/ARCHITECTURE.md): structure of the TypeScript implementation
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+MIT. See [LICENSE](https://github.com/alan-shabrandi/vrp-demo/blob/main/LICENSE).

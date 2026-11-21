@@ -1,6 +1,6 @@
 [project]
 name = "vrp-solver"
-version = "0.1.1"
+version = "0.1.2"
 description = "A standalone Python implementation of a Genetic Algorithm for the Vehicle Routing Problem (open VRP, fixed start/end points)."
 readme = "README.md"
 requires-python = ">=3.10"

@@ -1,49 +1,21 @@
 # Architecture
 
-This document is for engineers who need to change the VRP demo, not just
-run it. The README explains what the demo does. This file explains where
-the pieces live, how they talk to each other, and which boundaries we
-try not to cross. It is deliberately more concrete than the README. If
-the code and this document disagree, trust the code first, then fix this
-file.
+This document is for people who want to change the code, not just run it. The [README](./README.md) says what the demo does. This file says where things live, how they talk to each other, and which boundaries to keep. If the code and this document disagree, trust the code and fix the document.
 
-------------------------------------------------------------------------
-
-## Table of contents
-
--   [System overview](#system-overview)
--   [Layer model](#layer-model)
--   [Data flow](#data-flow)
--   [Module responsibilities](#module-responsibilities)
--   [Algorithm design](#algorithm-design)
--   [State management](#state-management)
--   [React 19 constraints](#react-19-constraints)
--   [Map rendering](#map-rendering)
--   [API contract](#api-contract)
--   [Type contracts](#type-contracts)
--   [Testing strategy](#testing-strategy)
--   [Extension points](#extension-points)
--   [Known constraints and
-    trade-offs](#known-constraints-and-trade-offs)
--   [Dependency map](#dependency-map)
-
-------------------------------------------------------------------------
+**Scope.** This covers the TypeScript web app under `src/`. The Python package in `packages/vrp-solver/` shares no code with it and is described in its own [README](./packages/vrp-solver/README.md). How the two relate is in [`docs/PROVENANCE.md`](./docs/PROVENANCE.md). Visual design is in [`docs/DESIGN.md`](./docs/DESIGN.md).
 
 ## System overview
 
-The application is split into a browser-based UI, a thin Next.js API
-route, a pure domain layer, and a Vitest test suite. The browser
-communicates with the solver only through HTTP; it never imports or
-invokes the algorithm directly.
+The browser never calls the algorithm directly. It sends points and config to a thin API route over HTTP, and the route validates, solves and shapes the response. Everything under `lib/` is plain TypeScript with no framework imports, so it runs in Node, in tests, or later in a worker.
 
-``` mermaid
+```mermaid
 flowchart TB
     subgraph Browser["Browser"]
         direction TB
-        Page["app/page.tsx<br/>(application state owner)"]
-        Controls["ControlPanel<br/>+ 7 children<br/>(controlled)"]
-        Map["MapView<br/>+ 10 children<br/>(dynamic import; client-only)"]
-        Results["ResultsPanel<br/>+ 5 children<br/>(presentation)"]
+        Page["app/page.tsx<br/>(owns application state)"]
+        Controls["ControlPanel<br/>(controlled)"]
+        Map["MapView<br/>(dynamic import, client only)"]
+        Results["ResultsPanel<br/>(presentation)"]
         Hooks["hooks/<br/>useOptimize · useKeyboardShortcut<br/>useDynamicTitle"]
         UILib["lib/ UI helpers and data<br/>summarizePointSet · placePoint · presets"]
 
@@ -69,7 +41,7 @@ flowchart TB
         API --> Improvement
     end
 
-    subgraph Domain["lib/ — pure domain modules"]
+    subgraph Domain["lib/ — domain modules"]
         Types["types.ts"]
         Distance["distance.ts"]
         Operators["operators.ts"]
@@ -88,408 +60,214 @@ flowchart TB
     NN --> Types
     Improvement --> Distance
 
-    Domain --> Tests["tests/ (Vitest)<br/>81 tests across 7 files"]
+    Domain --> Tests["tests/ (Vitest)"]
+
+    subgraph PyPkg["packages/vrp-solver/ — sibling Python package"]
+        direction TB
+        PyGA["ga.py · operators.py<br/>distance.py · rng.py"]
+        PyTests["tests/ (pytest)<br/>incl. golden cross-validation vs TS"]
+        PyGA --> PyTests
+    end
+
+    PyPkg -.->|"same seed → same route"| Domain
 ```
 
-The important part of that picture is the split between the browser and
-the API route. The UI never calls the algorithm directly. It sends
-points and config over HTTP, and the route does the parsing, validation,
-solving, and response shaping. Everything under `lib/` is pure enough to
-run in Node, in tests, or in a worker later if we need to move the
-solver off the request thread.
+## Layers and rules
 
-## Layer model
+Dependencies only point downward.
 
-There are five layers, and dependencies only point downward:
-
-``` mermaid
+```mermaid
 flowchart TB
     Presentation["Presentation (React)<br/>components/ · app/page.tsx<br/>app/layout.tsx · app/styles/*.css"]
-    Hooks["Hooks (React only)<br/>hooks/<br/>useOptimize · useDynamicTitle · useKeyboardShortcut"]
+    Hooks["Hooks (React only)<br/>hooks/"]
     API["API (Next.js route)<br/>app/api/optimize/route.ts"]
-    Domain["Domain (pure logic)<br/>lib/distance.ts · lib/ga.ts · lib/nearest-neighbor.ts<br/>lib/validation/* · lib/points.ts · lib/format.ts"]
+    Domain["Domain (plain TS)<br/>lib/distance · ga · nearest-neighbor<br/>validation/* · points · format"]
     Contracts["Contracts and constants<br/>lib/types.ts (types only)<br/>lib/constants.ts (runtime values)"]
 
-    Presentation -->|"depends on"| Hooks
-    Hooks -->|"depends on"| API
-    API -->|"depends on"| Domain
+    Presentation -->|"uses"| Hooks
+    Hooks -->|"HTTP"| API
+    API -->|"uses"| Domain
     Domain -->|"uses"| Contracts
 ```
 
-### Rules
+Rules:
 
--   `lib/types.ts` is the shared contract. It contains types only, with
-    no runtime imports.
--   `lib/*.ts` files do not import React or Next. The one exception is
-    `lib/utils.ts`, which is a tiny helper around `clsx` and
-    `tailwind-merge` for the UI. `lib/role-meta.ts` is plain data.
-    Everything else, including `lib/validation/*`, runs in Node, in
-    tests, and potentially in a worker without changes.
--   `app/api/*` never imports from `components/` or `hooks/`. The API
-    layer does not know the UI exists.
--   `components/*` never import from `app/api/*`. The UI goes through
-    HTTP; it does not reach into the route handler.
--   `hooks/*` depend only on `lib/`, never on `components/`.
--   Only `app/page.tsx` holds application state. Child components are
-    either controlled (`ControlPanel`, `ResultsPanel`) or own only
-    Leaflet's internal state (`MapView`).
--   `lib/validation/*` is a directory, not a file. Its public facade
-    (`index.ts`) exports exactly three names: `ValidationError`,
-    `parseOptimizeRequest`, and `requireStartAndEnd`. The internal
-    helpers (`primitives`, `fields`) are not re-exported. That is what
-    keeps the split invisible to consumers.
+- `lib/types.ts` contains types only and has no runtime imports.
+- `lib/*.ts` does not import React or Next. The one exception is `lib/utils.ts`, a small `clsx` + `tailwind-merge` helper for the UI. `lib/role-meta.ts` is plain data.
+- `app/api/*` never imports from `components/` or `hooks/`.
+- `components/*` never imports from `app/api/*`. The UI goes through HTTP.
+- `hooks/*` depend only on `lib/`, never on `components/`.
+- Only `app/page.tsx` holds application state. Child components are either controlled (`ControlPanel`, `ResultsPanel`) or own only Leaflet's internal state (`MapView`).
+- `lib/validation/` is a directory, but its `index.ts` exports exactly three names: `ValidationError`, `parseOptimizeRequest` and `requireStartAndEnd`. The other files in it are internal.
+- `packages/vrp-solver/` imports nothing from `src/`, and `src/` imports nothing from it. The only link is the cross-validation test. If the two shared code, the test could no longer show that they agree independently.
 
-If you break one of these rules, it is usually a sign that someone took
-a shortcut around the HTTP boundary or let a UI concern leak into the
-algorithm. Both are worth fixing before they spread.
-
-------------------------------------------------------------------------
+If you find yourself breaking one of these, it usually means a shortcut around the HTTP boundary or a UI concern leaking into the algorithm.
 
 ## Data flow
 
-### 1. Point placement
+### Placing a point
 
-``` text
-User clicks the map
+```text
+Click on the map
   → MapClickHandler (react-leaflet useMapEvents)
   → MapView.onMapClick(lat, lng)
-  → page.tsx handleMapClick(lat, lng)
-  → placePoint(points, clickMode, lat, lng, id)  ← pure, lib/points.ts
+  → page.tsx handleMapClick
+  → placePoint(points, clickMode, lat, lng, id)   (pure, lib/points.ts)
   → setPoints([...])
-  → reset()  ← invalidates result and aborts an in-flight request
+  → reset()   (clears result, aborts any in-flight request)
 ```
 
-`placePoint` owns the per-role rules: `start` replaces the existing
-start, `end` replaces the existing end, and `stop` appends. The `id` is
-passed in rather than generated inside the function, so the function
-stays pure and testable. The caller owns uniqueness, currently via
-`Date.now()`.
+`placePoint` applies the per-role rules: a new `start` replaces the old one, a new `end` replaces the old one, a `stop` is appended. The `id` is passed in so the function stays pure. The caller is responsible for uniqueness and currently uses `Date.now()`.
 
-Any change to the point set invalidates the previous route. `reset()` is
-the authoritative way to do that. The caller does not have to remember
-to also clear `result`, `error`, and the loading state.
+Any change to the points invalidates the route, and `reset()` is the single place that does it. Callers don't clear `result`, `error` and `loading` themselves.
 
-### 2. Config change
+### Changing a parameter
 
-``` text
-User drags a slider
+```text
+Drag a slider
   → ControlPanel.onConfigChange(newConfig)
   → page.tsx handleConfigChange
   → setConfig(newConfig)
   → reset()
 ```
 
-### 3. Optimization run
+### Running the optimizer
 
-``` text
-User clicks "Optimize route" (or Ctrl/Cmd + Enter)
-  → useOptimize.run()  (from ControlPanel via onOptimize, or via useKeyboardShortcut)
-  → abortRef.current?.abort()  ← supersede any in-flight request
-  → POST /api/optimize  { points, config }  (with AbortController signal)
-     ↓
-  → route.ts: parse → validate → runGA → nearestNeighbor → respond
-     ↓
-  → useOptimize setResult(data)
-  → onSuccess(data) → setActiveRoute("ga") · setMobileTab("results")
+```text
+Click "Optimize route" or press Ctrl/⌘ + Enter
+  → useOptimize.run()
+  → abort any in-flight request
+  → POST /api/optimize { points, config }   (with AbortController signal)
+      route.ts: parse → validate → solveGA → solveNearestNeighbor → respond
+  → setResult(data)
+  → onSuccess(data): setActiveRoute("ga"), setMobileTab("results")
   → useDynamicTitle updates document.title
-  → ResultsPanel renders · MapView renders new polyline
+  → ResultsPanel and MapView render the new route
 ```
 
-### 4. Route toggle
+### Switching between GA and baseline
 
-``` text
-User clicks "Baseline" tab in ResultsPanel
+```text
+Click "Baseline" in ResultsPanel
   → page.tsx setActiveRoute("baseline")
-  → MapView receives route = baseline.sequence, variant = "baseline"
-  → MapView renumbers stops by baseline visit order
-  → ResultsPanel renders baseline metrics as active
+  → MapView gets route = baseline.sequence, variant = "baseline"
+  → stops are renumbered by baseline visit order
 ```
 
-There is no additional API call here. Both routes are already in
-`result`.
+No extra request is made. Both routes are already in `result`.
 
-### 5. Reset (during or after a run)
+### Resetting
 
-``` text
-User clicks "Reset points"
+```text
+Click "Reset points"
   → page.tsx handleReset()
   → setPoints(INITIAL_POINTS)
-  → reset()  ← aborts in-flight fetch, clears result/error/loading
-  → setMapKey(k => k + 1)  ← remounts MapView (fitBounds fires fresh)
+  → reset()   (aborts the fetch, clears result, error and loading)
+  → setMapKey(k => k + 1)   (remounts MapView so fitBounds runs again)
 ```
 
-If a fetch was in flight, its response is never applied. The
-`AbortController` fires and the `try/catch` short-circuits before
-`setResult`.
+If a request was in flight, its response is dropped: the abort fires and the `try/catch` returns before `setResult`.
 
-------------------------------------------------------------------------
+## Modules
 
-## Module responsibilities
+### `lib/`
 
-### `lib/types.ts`
+| File | Responsibility |
+| --- | --- |
+| `types.ts` | Shared types: `Point`, `PointRole`, `Objective`, `GAConfig`, `FitnessHistoryPoint`, `RouteSolution`, `GAResult`, `BaselineResult`, `Preset`, `OptimizeRequest`, `OptimizeResponse` |
+| `constants.ts` | Physics constants, `MIN_POINTS` / `MAX_POINTS`, `VALID_ROLES`, `VALID_OBJECTIVES`, `DEFAULT_GA_CONFIG`, `GA_CONFIG_BOUNDS`, `GITHUB_REPO_URL` |
+| `distance.ts` | `haversineDistance`, `evaluateSequence`, `computeImprovement` |
+| `operators.ts` | `orderCrossover`, `swapMutation`, `tournamentSelect` |
+| `rng.ts` | `createRng`, `shuffle`, `randomIndex` |
+| `ga.ts` | `solveGA` |
+| `nearest-neighbor.ts` | `solveNearestNeighbor`, the baseline |
+| `validation/` | Request parsing and domain checks |
+| `points.ts` | `summarizePointSet`, `placePoint` |
+| `format.ts` | `formatDistance`, `formatTime` |
+| `presets.ts` | `INITIAL_POINTS` and the three `PRESETS` |
+| `role-meta.ts` | Labels and colors per point role |
+| `utils.ts` | `cn()` |
 
-This is the contract everyone shares. It defines:
+Some details worth knowing:
 
-  Symbol                                  Purpose
-  --------------------------------------- ----------------------------------------------
-  `Point`, `PointRole`                    A geographic point with role
-  `Objective`                             `"distance"` or `"time"`
-  `GAConfig`                              The tunable parameters
-  `FitnessHistoryPoint`                   One row of the convergence history
-  `RouteSolution`                         A fully evaluated route
-  `GAResult`, `BaselineResult`            Algorithm-specific extensions
-  `Preset`                                A named point set (used by `lib/presets.ts`)
-  `OptimizeRequest`, `OptimizeResponse`   HTTP contract
+**`types.ts` and `constants.ts`.** Types and runtime values are kept apart. `VALID_ROLES` and `VALID_OBJECTIVES` use `as const satisfies`, so TypeScript flags it if they drift from the types.
 
-There are zero runtime values here. Every constant lives in
-`lib/constants.ts`.
+**`distance.ts`.** No state and no randomness. `evaluateSequence(points, sequence, objective)` returns `{ sequence, totalDistance, totalTime, fitness }`. `computeImprovement(baseline, candidate)` returns a fraction clamped to `[0, 1]`.
 
-### `lib/constants.ts`
+**`operators.ts`.** The operators are exported functions, not private to `ga.ts`, so tests can call them directly. `swapMutation` returns a new array and doesn't change its input.
 
-All runtime constants live here:
+**`rng.ts`.** `createRng(seed)` returns a mulberry32 generator when a seed is given and `Math.random` otherwise. `shuffle` is Fisher–Yates and doesn't mutate. Determinism with a seed is a contract: the tests and the Python cross-validation both rely on it.
 
--   `EARTH_RADIUS_M`, `AVERAGE_SPEED_KMH`, `AVERAGE_SPEED_MS` for the
-    physics.
--   `MIN_POINTS`, `MAX_POINTS` for safety bounds.
--   `VALID_ROLES`, `VALID_OBJECTIVES` as `as const satisfies` arrays
-    that stay in sync with their corresponding types via TypeScript.
--   `DEFAULT_GA_CONFIG`, `GA_CONFIG_BOUNDS` for GA defaults and
-    validation ranges.
--   `BoundedGAConfigKey`, the exported type for `keyof` bounds.
--   `GITHUB_REPO_URL`, the public repo URL. It is consumed by
-    `Header.tsx` for the source link and by `layout.tsx` for
-    `metadata.other.repository`, so a fork updates one line.
+**`validation/`.**
 
-### `lib/distance.ts`
+| File | Responsibility |
+| --- | --- |
+| `index.ts` | Public facade |
+| `error.ts` | `ValidationError`, which the API route maps to HTTP 400. No dependencies, so the other files can import it without a cycle. |
+| `primitives.ts` | `isObject`, `asNumber`, `asIntInRange`, `isValidRole`, `isValidObjective` |
+| `fields.ts` | `parsePoint`, `parseConfig` |
+| `request.ts` | `parseOptimizeRequest` (runs the field parsers in the order listed under [Validation order](#validation-order)) and `requireStartAndEnd`, which both solvers use as a safety check |
 
-Pure geospatial primitives:
+**`points.ts`.** `summarizePointSet(points)` returns `{ startCount, endCount, stopCount, isReady, missing }` and is the only place that decides whether a point set is ready to optimize. The control panel uses it for the disabled button and the hint, and `page.tsx` uses it for the status pill and the shortcut.
 
--   `haversineDistance(a, b)` gives great-circle distance in meters.
--   `evaluateSequence(points, sequence, objective)` computes
-    `{ sequence, totalDistance, totalTime, fitness }`.
--   `computeImprovement(baseline, candidate)` returns fractional
-    improvement, clamped to `[0, 1]`.
+**`ga.ts`.** `solveGA(points, config)` does this:
 
-No state. No randomness. Deterministic given inputs. That is why it can
-be tested exhaustively against known distances.
+1. `requireStartAndEnd(points)`.
+2. With zero stops, return the single start→end route.
+3. `createRng(config.randomSeed)`.
+4. Create `populationSize` shuffled permutations.
+5. For each generation: sort, record best and average, breed the next generation.
+6. Return the best individual, the history and the number of generations run.
 
-### `lib/operators.ts`
+Three private helpers (`snapshotGeneration`, `breedNextGeneration`, `breedOffspring`) keep the main function readable. They aren't exported, and `ga.test.ts` tests the whole pipeline instead of the helpers.
 
-GA operators as individually exported pure functions:
+**`nearest-neighbor.ts`.** From the current point, go to the nearest unvisited stop, then finish at the fixed end.
 
--   `orderCrossover(p1, p2, rng)` always produces a valid permutation.
--   `swapMutation(chrom, rng)` returns a new array and does not mutate
-    the input.
--   `tournamentSelect(population, k, rng)` performs k-way selection.
+**`format.ts`.** `formatDistance(meters)` gives `"12.35 km"`. `formatTime(seconds)` gives `"45s"`, `"5m 5s"` or `"1h 25m"` (seconds are dropped above one hour).
 
-They are exported rather than kept private to `ga.ts` so they can be
-tested directly in `tests/operators.test.ts` without running a full GA.
+**`role-meta.ts`.** `ROLE_META` maps each role to its label and colors, and `ROLE_ORDER` is `["start", "stop", "end"]`. It replaced two near-identical maps in `ControlPanel` and `ResultsPanel`.
 
-### `lib/rng.ts`
+### `app/api/optimize/route.ts`
 
--   `createRng(seed?)` uses mulberry32 when a seed is provided, and
-    `Math.random` when `seed` is `undefined`.
--   `shuffle(arr, rng)` is Fisher--Yates and non-mutating.
--   `randomIndex(length, rng)` is `Math.floor(rng() * length)`.
+A thin wrapper:
 
-Determinism is a contract here, not an accident. `createRng(42)()`
-returns the same sequence of numbers in every environment. That is what
-makes the "deterministic with a fixed seed" assertion in
-`tests/ga.test.ts` reliable.
+1. `await req.json()`. If that fails, return `400` with `{ error: "Invalid JSON body" }`.
+2. `parseOptimizeRequest(body)`. On `ValidationError`, return `400` with its message.
+3. Run `solveGA`, `solveNearestNeighbor` and `computeImprovement`.
+4. Return `200` with an `OptimizeResponse`.
 
-### `lib/validation/` --- request parsing and domain invariants
+There is no algorithm or validation logic in this file.
 
-This is a directory with five files. The split is invisible because
-`index.ts` re-exports only the public API.
+### `app/page.tsx`
 
-  -----------------------------------------------------------------------
-  File                                Responsibility
-  ----------------------------------- -----------------------------------
-  `index.ts`                          Facade. Exports `ValidationError`,
-                                      `parseOptimizeRequest`,
-                                      `requireStartAndEnd`.
+The only state owner.
 
-  `error.ts`                          The `ValidationError` class that
-                                      the API route maps to HTTP 400. It
-                                      has no dependencies, so
-                                      `primitives`, `fields`, and
-                                      `request` can all import it without
-                                      a cycle.
+| State | Purpose |
+| --- | --- |
+| `points: Point[]` | Markers on the map |
+| `config: GAConfig` | GA parameters |
+| `clickMode: PointRole` | What the next map click creates |
+| `activeRoute: "ga" \| "baseline"` | Which route is shown |
+| `mapKey: number` | Bumped to remount the map on reset or preset load |
+| `mobileTab: MobileTab` | Visible panel on mobile |
 
-  `primitives.ts`                     `isObject`, `asNumber`,
-                                      `asIntInRange`, `isValidRole`,
-                                      `isValidObjective`. Generic helpers
-                                      with no domain knowledge.
+Everything else comes from hooks: `useOptimize` gives `run`, `reset`, `loading`, `error` and `result`; `useDynamicTitle(result)` syncs the tab title; `useKeyboardShortcut` binds <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Enter</kbd> to `run` while the point set is ready and nothing is loading. There is no `useEffect` in the page body and no `useState` for `result`, `error` or `loading`.
 
-  `fields.ts`                         `parsePoint(raw, index)` and
-                                      `parseConfig(raw)` as leaf parsers.
+`handleMapClick` delegates to `placePoint`, and `sidebarClass(side, mobileTab)` builds the class names for the two side panels.
 
-  `request.ts`                        `parseOptimizeRequest(body)`, which
-                                      orchestrates the leaf parsers in
-                                      the documented error-precedence
-                                      order, plus
-                                      `requireStartAndEnd(points)`, the
-                                      domain invariant used defensively
-                                      by both solvers.
-  -----------------------------------------------------------------------
+### `hooks/`
 
-The public surface is exactly three names, unchanged from when this was
-a single file. Every consumer (`route.ts`, `ga.ts`,
-`nearest-neighbor.ts`, `validation.test.ts`) imports from
-`@/lib/validation` and resolves to `index.ts`.
+**`useOptimize`** is the most important one. It handles:
 
-The original file was about 250 lines with four visible concerns: the
-error type, primitives, field parsers, and the request orchestrator. The
-`/* ----- Public: full request parsing ----- */` banner comments already
-marked those boundaries. The split makes them structural instead of just
-decorative.
-
-### `lib/points.ts`
-
--   `summarizePointSet(points)` returns
-    `{ startCount, endCount, stopCount, isReady, missing }`. It is the
-    single source of truth for "is this set ready to optimize?" and is
-    used by `ControlPanel` for the CTA disabled state and missing hint,
-    and by `page.tsx` for the header status pill and keyboard-shortcut
-    gate.
--   `placePoint(points, clickMode, lat, lng, id)` applies a map click:
-    `start` replaces, `end` replaces, and `stop` appends. It assumes
-    `id` is unique, which is the caller's responsibility. It was
-    extracted from `page.tsx`'s `handleMapClick` so the branching rules
-    stay testable and `page.tsx` stays a pure state router.
-
-### `lib/ga.ts`
-
-Exports `solveGA(points, config) → GAResult`. The pipeline is:
-
-1.  `requireStartAndEnd(points)`.
-2.  If there are zero stops, short-circuit to a single-edge route.
-3.  `createRng(config.randomSeed)`.
-4.  Initialise the population with `populationSize` shuffled
-    permutations.
-5.  Loop `generations` times: sort, record history, breed the next
-    generation.
-6.  Return the best individual, history, and generations run.
-
-Three private helpers keep the main function readable without adding
-module surface: `snapshotGeneration` for best and average,
-`breedNextGeneration` for elitism and fill, and `breedOffspring` for two
-tournament picks, OX, conditional mutation, and evaluation. They are not
-exported. `ga.test.ts` exercises the pipeline at the integration level:
-monotonic best, determinism, and GA versus baseline. That is a stronger
-check than isolated unit tests on the helpers would be.
-
-### `lib/nearest-neighbor.ts`
-
-Greedy baseline: from the current point, always hop to the nearest
-unvisited stop, then terminate at the fixed end. It is deliberately
-weak.
-
-### `lib/format.ts`
-
--   `formatDistance(meters)` returns `"12.35 km"` with two decimal
-    places.
--   `formatTime(seconds)` returns `"45s"`, `"5m 5s"`, or `"1h 25m"`.
-    Seconds are omitted above one hour.
-
-Both are pure and exported for unit tests and for reuse in future views.
-
-### `lib/presets.ts`
-
--   `INITIAL_POINTS` are the two starting points on page load.
--   `PRESETS` are three demo scenarios.
-
-The data lives in `lib/`, not `page.tsx`, so tests and alternative UIs
-can load it without importing page state.
-
-### `lib/role-meta.ts`
-
--   `ROLE_META` is
-    `Record<PointRole, { short, label, color, bg, border }>`
--   `ROLE_ORDER` is `["start", "stop", "end"]` for consistent iteration.
-
-This consolidates what used to be two nearly identical maps (`ROLE_META`
-in `ControlPanel` and `CHIP_META` in `ResultsPanel`) that had drifted by
-0.01 alpha.
-
-### `lib/utils.ts`
-
-`cn(...inputs)` combines `clsx` and `tailwind-merge`. It is the only
-Tailwind-aware helper. It is used by `page.tsx`'s
-`sidebarClass(side, mobileTab)` helper and by `Button` and `Spinner` to
-compose conditional class names with correct Tailwind conflict
-resolution.
-
-### `app/api/optimize/route.ts` (\~50 lines)
-
-A thin HTTP wrapper:
-
--   `await req.json()`; on failure, `400` with
-    `{ error: "Invalid JSON body" }`.
--   `parseOptimizeRequest(body)`; on `ValidationError`, `400` with the
-    error message.
--   `solveGA`, `solveNearestNeighbor`, and `computeImprovement`.
--   `200` with `OptimizeResponse`.
-
-There is no algorithm logic and no validation logic in this file. Test
-coverage comes through `parseOptimizeRequest` at the unit level and
-through the manual UI at the integration level.
-
-### `app/page.tsx` (\~155 lines)
-
-This is the state owner. It holds:
-
-  State                               Purpose
-  ----------------------------------- -----------------------------------
-  `points: Point[]`                   The current map markers
-  `config: GAConfig`                  The GA parameters
-  `clickMode: PointRole`              What the next map click creates
-  `activeRoute: "ga" \| "baseline"`   Which route is shown
-  `mapKey: number`                    Force map remount on reset/preset
-  `mobileTab: MobileTab`              Which panel is visible on mobile
-
-Everything else comes from hooks:
-
--   `useOptimize({ points, config, onSuccess })` →
-    `{ run, reset, loading, error, result }`
--   `useDynamicTitle(result)`
--   `useKeyboardShortcut({ key: "Enter", ctrlOrMeta: true, enabled: ready && !loading, handler: run })`
--   `useMemo(summarizePointSet, [points])` → `{ stopCount, isReady }`
--   `useMemo` for `activeSequence`
-
-Two local helpers keep the component body short:
-
--   `handleMapClick`, now four lines, delegates to `placePoint`.
--   `sidebarClass(side, mobileTab)`, a single helper that covers the
-    shared majority of the old `controlsClass` and `resultsClass`
-    blocks. The differences, such as which side, which order, which
-    width, which border, and the slide-up animation on Results only, are
-    parameters.
-
-There is no `useEffect` in the body. There is no `useState` for
-`result`, `error`, or `loading`; those live in `useOptimize`.
-
-### `hooks/useOptimize.ts` (\~100 lines)
-
-This is the most important hook. It manages:
-
--   **Fetch lifecycle** --- POST `/api/optimize`, JSON in and out,
-    mapping 4xx/5xx responses to errors.
--   **Concurrency** --- an in-flight request is aborted when `run()` is
-    called again.
--   **Reset safety** --- `reset()` aborts any in-flight request. This
-    prevents the "add a point while optimizing, then watch a stale
-    result flash in" bug.
--   **Callback stability** --- `onSuccess` is mirrored into a ref via
-    `useEffect`, following the React 19 rule below, so `run` stays
-    stable across renders even when the caller passes an inline arrow.
--   **Loading hygiene** --- `setLoading(false)` runs in `finally`, but
-    only for the current controller. A superseded run must not clear
-    loading for the newer one.
+- the fetch: POST `/api/optimize`, JSON in and out, 4xx and 5xx turned into error messages;
+- concurrency: calling `run()` again aborts the previous request;
+- reset safety: `reset()` aborts any in-flight request, so a stale result can't appear after the user adds a point mid-run;
+- callback stability: `onSuccess` is stored in a ref, so `run` keeps the same identity even if the caller passes an inline function;
+- loading state: `setLoading(false)` runs in `finally`, but only for the current controller, so a superseded run can't clear the loading flag of the newer one.
 
 Return shape:
 
-``` typescript
+```typescript
 {
   run: () => Promise<void>;
   reset: () => void;
@@ -499,608 +277,225 @@ Return shape:
 }
 ```
 
-### `hooks/useDynamicTitle.ts` (\~20 lines)
+**`useDynamicTitle`** sets `document.title` from `result.improvementPercent` after hydration. The `Metadata` in `layout.tsx` stays the source for server rendering and link previews.
 
-A `useEffect` that syncs `document.title` with
-`result.improvementPercent`. The `Metadata` in `layout.tsx` stays
-authoritative for SSR and social previews. This hook only touches the
-tab label after hydration.
+**`useKeyboardShortcut`** is a generic keybinding hook with two effects. One keeps the latest `handler` in a ref. The other attaches the `keydown` listener and only re-runs when `key`, `ctrlOrMeta` or `enabled` change, so a new handler identity doesn't re-attach it.
 
-### `hooks/useKeyboardShortcut.ts` (\~50 lines)
+### Components worth a note
 
-A generic keybinding hook with two effects:
+**`Header` and `StatusPill`.** `Header` holds the logo, title, status pill and GitHub link. `StatusPill` is separate because it is a four-state machine (`loading`, `hasResult`, `ready`, `not ready`) with its own props. `HeaderProps` is an alias of `StatusPillProps`.
 
-1.  Mirror `handler` into a ref, following the React 19 purity rule.
-2.  Attach or detach `keydown` when `enabled` changes.
+**`ConvergenceSparkline` and `sparkline-geometry.ts`.** The component renders the SVG, creates the gradient ID with `useId` and handles the animation. `sparkline-geometry.ts` holds the math: Y-axis inversion, the `best` and `average` paths, the fill path and the animation key. `computeSparklineGeometry` throws when `history.length < 2`; the component returns `null` before that can happen, so the throw is only a guard.
 
-The two-effect split means the `keydown` listener is not re-attached
-when only `handler` changes. It re-attaches only when `key`,
-`ctrlOrMeta`, or `enabled` changes.
+## Algorithm implementation
 
-### `components/layout/Header.tsx` + `StatusPill.tsx`
+The README describes the algorithm. These are the implementation details.
 
-`Header` is a shell: logo, title, and a right-aligned cluster containing
-`StatusPill` and the GitHub link. `StatusPill` is extracted because it
-is a four-state machine (`loading` → `hasResult` → `ready` →
-`not ready`) with its own prop surface. If it were inlined, it would
-dominate `Header.tsx`.
+**Encoding.** `chromosome = [stopId_1, …, stopId_n]` and `fullRoute = [startId, ...chromosome, endId]`. Only stops are permuted, so the search space is `n!` instead of `(n+2)!`.
 
-`HeaderProps` is aliased to `StatusPillProps` so the shell does not
-duplicate the contract. The GitHub link (`<a href={GITHUB_REPO_URL}>`)
-has `aria-label`, `title`, `rel="noopener noreferrer"`, and a
-focus-visible background, matching the interaction pattern used in the
-rest of the header.
+**Fitness.** `evaluateSequence` sums haversine distances in meters and divides by `AVERAGE_SPEED_MS` for time. `fitness` is whichever the objective selects, and lower is better. The speed is constant, so both objectives rank routes the same way.
 
-### `components/results/ConvergenceSparkline.tsx` + `sparkline-geometry.ts`
+**Tournament selection.** Draw `k` individuals with replacement and return the one with the lowest fitness. A higher `k` converges faster and risks converging too early. Bounds are `2..10`.
 
-The component owns rendering: SVG, gradient via `useId`, and animation.
-`sparkline-geometry.ts` owns the math: Y-axis inversion, `buildPath` for
-`best` and `average`, fill-path extrapolation, and `animationKey` from
-the endpoints. The split makes the coordinate math testable without
-mounting the DOM, and it lets the render path focus on shapes.
+**Order crossover.** Pick two cut points, copy `p1[start..end]` into the child at the same positions, then fill the remaining positions from `p2` in order, skipping genes already present. The child is always a valid permutation, so no repair step is needed.
 
-`computeSparklineGeometry` throws if `history.length < 2`. The component
-guards with `if (history.length < 2) return null` before calling it, so
-the throw is a defensive invariant, not an expected path.
+**Swap mutation.** Swap two distinct random positions. It runs per offspring with probability `mutationRate`.
 
-------------------------------------------------------------------------
+**Elitism.** The top `elitismCount` individuals carry over unchanged. That guarantees `history[g].best <= history[g-1].best`, which the tests assert, and the final result is never worse than the best of the initial population. Bounds are `1..10`, and `elitismCount` must be below `populationSize` (checked in `parseOptimizeRequest`).
 
-## Algorithm design
+**Determinism.** With `config.randomSeed` set, `createRng` returns mulberry32 and the run is repeatable. Tests always set a seed. The UI never does, so runs in the browser differ each time.
 
-### Encoding
-
-``` text
-chromosome = [stopId_1, stopId_2, ..., stopId_n]
-fullRoute  = [startId, ...chromosome, endId]
-```
-
-Only stop IDs are permuted. Start and end are fixed wrappers. The search
-space is `n!` instead of `(n+2)!`.
-
-### Fitness
-
-`evaluateSequence(points, fullRoute, objective)` returns:
-
--   `totalDistance` in meters, as the sum of haversine distances.
--   `totalTime` in seconds, as `totalDistance / AVERAGE_SPEED_MS`.
--   `fitness`, whichever objective was selected.
-
-Lower is better. The GA minimises.
-
-### Selection --- tournament
-
-`tournamentSelect(population, k, rng)`:
-
-1.  Draw `k` individuals uniformly at random, with replacement.
-2.  Return the one with the lowest `fitness`.
-
-Higher `k` means more selective pressure, faster convergence, and a
-higher risk of premature convergence. Bounds are `2..10`.
-
-### Crossover --- OX
-
-`orderCrossover(p1, p2, rng)`:
-
-1.  Pick two random cut points, `[start, end]`.
-2.  Copy `p1[start..end]` into the child at the same positions.
-3.  Fill the remaining positions from `p2` in order, skipping genes that
-    are already present.
-
-The result is always a valid permutation. No repair step is needed.
-
-### Mutation --- swap
-
-`swapMutation(chrom, rng)`:
-
-1.  Pick two distinct positions at random and swap them.
-2.  Call it per offspring with probability `mutationRate`.
-
-### Elitism
-
-The top `elitismCount` individuals from generation `g` carry unchanged
-into generation `g+1`. This guarantees:
-
--   `history[g].best <= history[g-1].best` for all `g`.
--   The convergence chart is monotonic.
--   The final result is never worse than the initial population's best.
-
-Bounds are `1..10`, and it must be `< populationSize`, which is enforced
-by `parseOptimizeRequest`.
-
-### Determinism
-
-When `config.randomSeed` is a number, `createRng(seed)` returns a
-mulberry32 generator. The same seed produces identical runs in any Node
-version and in any order.
-
-Tests always set a seed. The UI never does, so production runs are
-non-deterministic, as users expect.
-
-------------------------------------------------------------------------
+The Python package uses the same mulberry32, ported line by line. Given the same seed, both implementations draw the same random numbers and the operators consume them in the same order. [`docs/PROVENANCE.md`](./docs/PROVENANCE.md) explains how this is checked.
 
 ## State management
 
-### Ownership
+**Ownership.** All application state is in `app/page.tsx`, except the optimize lifecycle (`loading`, `error`, `result`, inside `useOptimize`) and Leaflet's internals (tile cache, viewport, popups). There is no Redux, Zustand or Context. The state is small and lives on one page. If persistence is ever needed, a single `Context` provider around `page.tsx` is the migration path.
 
-All application state lives in `app/page.tsx` except for:
+**Invalidation.** Any change to `points` or `config` sets `result` to `null` and aborts any in-flight request. This lives in `useOptimize.reset()`. Keeping an old route on screen while the points change would show a route that doesn't match what's on the map.
 
--   The optimize lifecycle, which owns `loading`, `error`, and `result`
-    internally and exposes them through `useOptimize`.
--   Map internals such as Leaflet's tile cache, viewport, and popups.
+**Loading.** `useOptimize.loading` disables the Optimize button, shows the map overlay with a spinner, disables the shortcut, and puts `Optimizing…` in the status pill. There is no cancel button. Any change to points or config cancels the request through `reset()`.
 
-There is no Redux, Zustand, or Context. The state is small, linear, and
-confined to one page. Adding a store would add ceremony without removing
-friction. If persistence becomes a requirement, the migration path is a
-single `Context` provider wrapped around `page.tsx`.
-
-### Invalidation rule
-
-Any change to `points` or `config` sets `result` to `null` and aborts
-any in-flight request.
-
-That rule lives in `useOptimize.reset()`. The alternative, leaving a
-stale result visible while points change, was rejected. Showing a route
-that no longer matches the current points is misleading.
-
-### Loading
-
-`useOptimize.loading` gates:
-
--   The Optimize button, via `disabled={notReady || loading}`.
--   The map overlay, which shows a spinner and "Evolving route...".
--   The keyboard shortcut, via `enabled: ready && !loading`.
--   The status pill, which shows `"Optimizing…"`.
-
-There is no separate cancel button. `reset()` is invoked by any point or
-config change and serves that role.
-
-### Errors
-
-`useOptimize.error: string | null` is set by the API-call failure
-handler in `useOptimize.run`. It is rendered in `ControlPanel` with
-`role="alert"`. It is cleared by `reset()` or by a successful subsequent
-run.
-
-------------------------------------------------------------------------
+**Errors.** `useOptimize.error` is set when the request fails and shown in `ControlPanel` with `role="alert"`. `reset()` or a later successful run clears it.
 
 ## React 19 constraints
 
-### The "latest ref" pattern
+**Latest-ref pattern.** React 19 doesn't allow writing to `ref.current` during render (`react-hooks/refs`). So this old pattern is out:
 
-Pre-React-19 code often looked like this:
-
-``` typescript
+```typescript
 const ref = useRef(handler);
-ref.current = handler; // React 19 lints this
+ref.current = handler; // flagged by the linter
 ```
 
-React 19 forbids writes to `ref.current` during render
-(`react-hooks/refs`). The correct form is:
+and the ref is updated in an effect instead:
 
-``` typescript
+```typescript
 const ref = useRef(handler);
 useEffect(() => {
   ref.current = handler;
 }, [handler]);
 ```
 
-Effect ordering helps here: the ref-sync effect runs before any user
-event can fire, so the ref always holds the latest value by the time
-`run` or `keydown` executes.
+The effect runs before any user event can fire, so the ref holds the latest value whenever `run` or the `keydown` handler executes. `useOptimize` and `useKeyboardShortcut` both use this.
 
-Both `useOptimize` and `useKeyboardShortcut` use this pattern. The
-two-effect split in `useKeyboardShortcut` is deliberate. It prevents the
-`keydown` listener from re-attaching on every parent re-render while
-still keeping the handler fresh.
+**`useId` for SVG gradients.** A fixed gradient ID would collide if the sparkline rendered twice on a page, because the second `url(#sparkFill)` would point at the first gradient. `useId` gives each instance its own ID and is stable across server and client rendering.
 
-### `useId` for SVG gradients
-
-`ConvergenceSparkline` uses `useId()` for the `<linearGradient>` ID. A
-hardcoded ID would collide if the chart were rendered twice on one page.
-The second instance's `url(#sparkFill)` would resolve to the first
-instance's gradient. `useId` generates a unique, SSR-stable ID per
-instance.
-
-### Render purity in `SequenceDisplay`
-
-`SequenceDisplay` used to increment `visitIndex` inside
-`sequence.map()`:
-
-``` typescript
-let visitIndex = 0;
-{sequence.map((id, i) => {
-  if (p.role === "stop") visitIndex++; // mutation during render
-  // ...
-})}
-```
-
-It worked because `let` was local and `Array.map` is synchronous, but it
-was fragile. The fix is to compute a `SequenceItem[]` in a `for` loop
-before `return`, then render with `items.map(...)`. There is no mutation
-inside the render path, and the arrow-emission condition becomes
-`i < items.length - 1`. That also fixes a dangling-arrow edge case if
-the sequence ever contained an unknown ID at the end.
-
-------------------------------------------------------------------------
+**No mutation during render.** `SequenceDisplay` used to increment a `visitIndex` variable inside `sequence.map()`. It worked, but mutating a variable during render is fragile. It now builds a `SequenceItem[]` in a `for` loop before `return` and renders from that.
 
 ## Map rendering
 
-`MapView` sits at the boundary between React's declarative model and
-Leaflet's imperative one. A few pieces are worth calling out.
+`MapView` sits between React's declarative model and Leaflet's imperative one.
 
-### 1. Draw-in animation
+**Draw-in animation.** In `RoutePolyline`, a `useLayoutEffect` reads the rendered SVG path from `lineRef.current?.getElement()`, sets `strokeDasharray` and `strokeDashoffset` to the path length, forces a reflow with `getBoundingClientRect()`, then sets `strokeDashoffset = 0` with a CSS transition. It runs when the route changes, detected by joining the sequence into a key. The baseline skips it, because its `dashArray: "8 8"` would conflict with the animation's `strokeDasharray`.
 
-`RoutePolyline`'s `useLayoutEffect` does the following:
+**Stop numbers.** `useStopNumbers(points, route)` returns a `Map<string, number>`. With a route it holds visit order. Without one it holds creation order. `SequenceDisplay` uses the same visit-order logic, so the map and the sidebar always agree.
 
-1.  Read the rendered SVG path via `lineRef.current?.getElement()`.
-2.  Set `strokeDasharray = length` and `strokeDashoffset = length`.
-3.  Force reflow with `getBoundingClientRect()` so the browser commits
-    the initial state.
-4.  Set `strokeDashoffset = 0` with a CSS transition.
+**Auto-fit.** `FitBoundsOnce` runs once per mount, guarded by `useRef(false)`. To fit again after a preset load or reset, `page.tsx` changes `mapKey` and the map remounts.
 
-This runs whenever `route` changes, identified by joining the sequence
-into a key. Baseline skips it because `dashArray: "8 8"` conflicts with
-the draw-in's `strokeDasharray`.
+**Dynamic import.** `MapViewWrapper` uses `next/dynamic` with `ssr: false`, because Leaflet needs a DOM. It is the only part of the map the rest of the app imports, and its props are exactly `MapViewProps`.
 
-### 2. Stop numbering
-
-`useStopNumbers(points, route)` returns a `Map<string, number>`:
-
--   When a route is active, it returns visit order, matching the
-    sequence in `ResultsPanel`.
--   When there is no route, it returns creation order, which is stable
-    across renders.
-
-That is the single source of truth. `SequenceDisplay` mirrors the same
-visit-order logic in its pre-compute pass, so the map and the sidebar
-always agree.
-
-### 3. Auto-fit
-
-`FitBoundsOnce` runs once per mount, guarded by `useRef(false)`. To
-reset it on preset load or point reset, `page.tsx` bumps `mapKey`, which
-remounts `MapView` entirely. That is cleaner than an imperative "re-fit
-now" call after state updates.
-
-### 4. Dynamic import
-
-`MapViewWrapper` uses `next/dynamic` with `ssr: false` because Leaflet
-needs a DOM. The wrapper is the only entry point the page sees.
-`MapView` and its siblings are never imported outside `components/map/`.
-
-`MapViewWrapperProps` is exactly `MapViewProps`, with no extra props. An
-earlier unused `loading?: boolean` prop was removed during the recent
-refactor.
-
-------------------------------------------------------------------------
+**Leaflet boundary.** The code uses react-leaflet components and hooks (`MapContainer`, `Marker`, `Polyline`, `Popup`, `TileLayer`, `useMap`, `useMapEvents`). Imperative Leaflet calls are limited to a few `useLayoutEffect`s and refs.
 
 ## API contract
 
-### Request
-
-``` typescript
+```typescript
 interface OptimizeRequest {
   points: Point[];
   config: GAConfig;
 }
-```
 
-### Response
-
-``` typescript
 interface OptimizeResponse {
   ga: GAResult;
   baseline: BaselineResult;
-  improvementPercent: number; // clamped to [0, 1]
+  improvementPercent: number; // a fraction in [0, 1], not a percentage
 }
 ```
 
-### Error responses
+Errors: `400` for invalid points or config and `500` for unexpected server errors, both with `{ error: string }`.
 
--   `400` for invalid points or config. Body: `{ error: string }`.
--   `500` for an unexpected server error. Body: `{ error: string }`.
+### Validation order
 
-### Validation order (in `parseOptimizeRequest`)
+`parseOptimizeRequest` checks, in this order:
 
-1.  Body is an object.
-2.  `points` is an array.
-3.  Point count is within `[MIN_POINTS, MAX_POINTS]`.
-4.  Each point is a valid `Point` (`id`, `lat`, `lng`, `role`, optional
-    `label`).
-5.  There is exactly one `start` and exactly one `end`.
-6.  There are no duplicate IDs.
-7.  `config`, if present, has every numeric field within
-    `GA_CONFIG_BOUNDS`.
-8.  `elitismCount < populationSize`.
+1. The body is an object.
+2. `points` is an array.
+3. The number of points is within `[MIN_POINTS, MAX_POINTS]`.
+4. Each point is valid (`id`, `lat`, `lng`, `role`, optional `label`).
+5. There is exactly one `start` and one `end`.
+6. No ID appears twice.
+7. `config`, if present, has every numeric field within `GA_CONFIG_BOUNDS`.
+8. `elitismCount < populationSize`.
 
-Order matters for error messages because the user should see the most
-specific error first. The `validation/` split preserves this order.
-`request.ts` calls `parsePoint` for the full array before counting
-roles, so a malformed point produces a point-level error even if a
-role-count violation also exists.
+The order decides which error the user sees first. All points are parsed (step 4) before roles are counted (step 5), so a malformed point gets a point-level error even when the role count is also wrong.
 
-------------------------------------------------------------------------
+### Python parity
+
+`packages/vrp-solver/` accepts the same request and returns the same response, through its CLI (`vrp-solver problem.json`) and its Python API (`parse_optimize_request`, `solve_ga`, `solve_nearest_neighbor`, `compute_improvement`). Field names are camelCase on both sides so the JSON is identical.
 
 ## Type contracts
 
-### Between domain and API
+- **Domain to API:** the API only uses types from `lib/types.ts`, so adding a field to `Point` is a one-line change both layers see.
+- **API to UI:** `OptimizeResponse` is the only shape the UI reads from the network. There are no partial or streamed responses.
+- **UI to components:** every component has an explicit `Props` interface and there are no `any` bridges, so a type change shows up at every call site.
+- **TypeScript to Python:** the two sides are parallel, not shared. TypeScript declares interfaces in `lib/types.ts`. Python declares dataclasses and Pydantic models in `types.py` and `validation.py`. The cross-validation tests catch drift: if a field name or type changes on one side only, the golden tests fail. Generating one side's types from the other would remove the manual sync, but it would also couple the two implementations. If a third implementation is ever added, generation may become worth it.
 
-The API only receives types declared in `lib/types.ts`. Adding a field
-to `Point` is a one-line change that both layers see.
+## Testing
 
-### Between API and UI
+Web app tests are unit tests for `lib/`. There are no component, integration or end-to-end tests. The Python package has its own suite, which doesn't touch the web app, and the web tests don't touch it.
 
-`OptimizeResponse` is the only shape the UI consumes from the network.
-There are no partial responses, no streaming, and no incremental
-updates.
+Why they stop at `lib/`:
 
-### Between UI and components
+- The algorithm and the pure helpers are where bugs are subtle, so they get the most coverage.
+- The UI is visual and interactive, and checking it by hand is faster than maintaining snapshot tests.
+- The API route is a thin wrapper, so testing `lib/validation/` and the solvers directly covers more than a mocked HTTP handler would.
 
-Every child component has an explicit `Props` interface. There are no
-`any` bridges across component boundaries. If a prop's type changes,
-TypeScript catches every call site.
+Test files in `tests/`: `distance`, `operators`, `format`, `points`, `validation`, `ga` and `nearest-neighbor`.
 
-### Between UI and Leaflet
+Not tested automatically:
 
-`MapView` uses react-leaflet primitives: `MapContainer`, `Marker`,
-`Polyline`, `Popup`, `TileLayer`, `useMap`, and `useMapEvents`. For
-imperative operations such as measuring path length or fitting bounds,
-it uses `useLayoutEffect` and Leaflet refs. It never touches `L.map`
-directly outside those controlled places.
+- **Hooks and components.** Testing them needs `@testing-library/react` and `jsdom`, which is a lot of extra setup for a demo. They are checked by hand before each deploy.
+- **Map rendering.** Leaflet has its own tests, and the integration here is small.
+- **Sparkline rendering.** The geometry can be tested without the DOM, but only the SVG output is checked by hand.
 
-------------------------------------------------------------------------
-
-## Testing strategy
-
-Tests are unit tests on `lib/` only. There are no component tests, no
-integration tests, and no E2E tests.
-
-### Why tests stop at `lib/`
-
--   The algorithm and pure helpers are where bugs are subtle and
-    expensive. They get exhaustive coverage.
--   The UI is visual and interactive. Manual QA catches regressions in
-    seconds that a snapshot test would miss.
--   The API is a thin wrapper over `lib/validation/` and the solvers.
-    Testing those directly gives stronger coverage than a mocked HTTP
-    handler.
-
-### Coverage
-
--   `distance.test.ts` (14 tests): haversine accuracy, route sum, time
-    conversion, and `computeImprovement` clamping and divide-by-zero.
--   `operators.test.ts` (7 tests): OX validity, including permutation,
-    no duplicates, and determinism, plus swap mutation invariants.
--   `format.test.ts` (9 tests): `formatDistance` and `formatTime`
-    boundary cases.
--   `points.test.ts` (7 tests): `summarizePointSet` for every point-set
-    permutation.
--   `validation.test.ts` (28 tests): `parseOptimizeRequest` happy path
-    plus 22 error cases, and `requireStartAndEnd` invariants.
--   `ga.test.ts` (12 tests): structural invariants, determinism, GA
-    versus baseline, and edge cases.
--   `nearest-neighbor.test.ts` (4 tests): sequence validity and
-    determinism.
-
-**Total: 81 tests.**
-
-### Candidates for follow-up
-
-Two pure helpers were added or extracted during the recent refactor and
-would fit the existing test conventions:
-
--   `placePoint` (`lib/points.ts`): the per-role branching, where
-    `start` replaces, `end` replaces, and `stop` appends, is worth a
-    small table test.
--   `computeSparklineGeometry`
-    (`components/results/sparkline-geometry.ts`): the Y-axis inversion
-    and `|| 1` range fallback are exactly the kind of edge cases
-    `format.test.ts` covers for `formatTime`.
-
-Neither is urgent. Both are exercised end-to-end by the manual UI and
-the `ga.test.ts` integration path, but adding them would keep
-`lib/`-level coverage at 100% of pure functions.
-
-### What is not tested, deliberately
-
--   **Hooks** (`useOptimize`, `useKeyboardShortcut`, `useDynamicTitle`):
-    testing them would require `@testing-library/react` plus `jsdom`.
-    The manual QA checklist in commit history covers their behavior.
-    Adding a second Vitest project to the config would be a non-trivial
-    cost for a demo.
--   **React components**: visual and exercised manually before every
-    deploy.
--   **Map rendering**: Leaflet's own test suite covers the primitives,
-    and the app's integration is trivial.
--   **Sparkline SVG**: the geometry is now testable in isolation through
-    `sparkline-geometry.ts`, but the rendering path is exercised by the
-    manual UI.
+Two small pure helpers are good candidates for tests: `placePoint` (a table test over the three roles) and `computeSparklineGeometry` (the Y-axis inversion and the `|| 1` range fallback).
 
 ### CI
 
-`.github/workflows/ci.yml` runs on every push and pull request:
+Web app (`.github/workflows/ci.yml`), on every push and pull request:
 
-``` text
+```text
 typecheck → lint → format:check → test → build
 ```
 
-`npm run ci` locally mirrors this pipeline exactly.
+`npm run ci` runs the same steps locally.
 
-------------------------------------------------------------------------
+Python package (`.github/workflows/python-solver.yml`), when files under `packages/vrp-solver/` or the workflow itself change:
+
+```text
+ruff check → ruff format --check → mypy src/ → pytest
+```
 
 ## Extension points
 
-### Cleanly supported
+### Fits the current structure
 
--   **New objective, such as "minimize fuel".** Add `"fuel"` to
-    `Objective` in `types.ts`. Extend `evaluateSequence` in
-    `distance.ts` with a `fuelCost` function. Pass it through the API
-    and results panel as-is.
--   **New constraint, such as "must visit a specific stop first".** Add
-    a constraint to `GAConfig`. In `solveGA`'s `breedOffspring`, apply a
-    repair step after crossover and mutation. Or replace `swapMutation`
-    with a constraint-aware operator. All operators live in
-    `lib/operators.ts` and are individually testable.
--   **URL state (`?points=...&config=...`).** No API change is needed.
-    Serialize points and config to query params in `page.tsx`. On mount,
-    hydrate from the URL. `INITIAL_POINTS` and `DEFAULT_GA_CONFIG`
-    provide the fallback.
--   **Real traffic routing.** Replace `distance.ts` with a call to OSRM
-    or a commercial router. `evaluateSequence` returns the same shape,
-    so nothing above it changes. The API route will need to `await`; it
-    is currently synchronous. `useOptimize` already handles the async
-    pattern.
--   **Persisting results.** Add a database. The API gains a write after
-    `solveGA`. The UI gains a history panel. No change to `lib/`.
--   **Adding a design token.** Add it to `app/styles/tokens.css` under
-    `@theme`. Every component picks it up via `var(--color-*)`, with no
-    component file changes.
--   **Adding a keyframe.** Add it to `app/styles/keyframes.css` and
-    reference it via `--animate-*` in `tokens.css` or by name in
-    `style={{ animation: ... }}`.
+- **A new objective, such as fuel.** Add it to `Objective` in `types.ts` and extend `evaluateSequence`. The API and results panel pass it through. Make the same change in `packages/vrp-solver/` and update the golden vectors in `test_cross_validation.py`.
+- **A new constraint, such as "visit this stop first".** Add it to `GAConfig`, then either repair the child in `breedOffspring` after crossover and mutation, or replace `swapMutation` with a constraint-aware operator. The Python side needs the same change.
+- **URL state (`?points=...&config=...`).** No API change is needed. Serialize in `page.tsx`, read it on mount, and fall back to `INITIAL_POINTS` and `DEFAULT_GA_CONFIG`.
+- **Real traffic routing.** Replace `distance.ts` with calls to OSRM or a commercial router. `evaluateSequence` keeps its return shape. The route handler would become async; `useOptimize` already handles that on the client.
+- **Saving results.** Add a database write after `solveGA` and a history panel in the UI. `lib/` doesn't change.
 
-### Requires restructuring
+### Needs restructuring
 
--   **Multi-vehicle VRP.** The chromosome becomes an array of arrays,
-    one permutation per vehicle. Crossover and mutation need to be
-    redesigned. This is a different algorithm, so plan for a new
-    `lib/ga-multi.ts` and a new API endpoint.
--   **Live map interaction while optimizing.** The map already allows
-    panning during loading because the overlay uses
-    `pointer-events-none`. But state mutations during a run currently
-    abort it. Allowing optimistic updates without aborting would require
-    a more careful state model. It is doable, but not a drop-in.
--   **Very large point sets (100+).** `MAX_POINTS = 25` because
-    `populationSize × generations × n²` grows fast. At 100 points, the
-    synchronous API route would block the Node event loop for seconds.
-    This needs a worker (`worker_threads`) or a job queue, and the UI
-    would need polling or SSE.
+- **Multi-vehicle VRP.** The chromosome becomes one permutation per vehicle, and crossover and mutation have to be redesigned. Plan for a new `lib/ga-multi.ts`, a matching Python module and a new endpoint. Cross-validation gets harder because different representations can describe the same solution, so solutions would need a canonical form before comparing.
+- **Interacting with the map during a run.** Panning already works, because the loading overlay has `pointer-events-none`. But changing points or config aborts the run. Allowing edits without aborting needs a more careful state model.
+- **More than about 25 points.** `MAX_POINTS = 25` because the cost grows with `populationSize × generations × n²`. Much larger sets would block the Node event loop for seconds. This needs `worker_threads` or a job queue, and the UI would need polling or SSE.
 
-------------------------------------------------------------------------
+## Known constraints
 
-## Known constraints and trade-offs
-
--   **`MAX_POINTS = 25`.** This is a safety cap so a single request
-    never blocks the server for more than about 500ms at the default
-    config.
--   **Synchronous API.** The route handler blocks the Node event loop
-    while `solveGA` runs. That is fine at the current scale and
-    documented as a known limit. `useOptimize` already handles the async
-    client side, so moving to a worker or queue is an API-only
-    migration.
--   **No request cancellation button.** `reset()` cancels implicitly
-    whenever points or config change. There is no explicit cancel CTA
-    because the request completes in under a second for every realistic
-    point set.
--   **Weak baseline is intentional.** See the README. The improvement
-    percentage shows that the GA finds a better route than greedy. It is
-    not a claim of optimality.
--   **No component or hook tests.** See the testing strategy. Manual QA
-    is documented in commit history.
--   **Single map mount per state.** Reset and preset-load remount the
-    map with `key={mapKey}`. This is a deliberate trade-off: easier to
-    reason about than imperative `fitBounds` on state change. The
-    remount cost is negligible because `MapContainer` reuses the
-    underlying DOM node.
--   **No SSR for the map.** `MapViewWrapper` uses
-    `dynamic(..., { ssr: false })`. Leaflet requires a DOM, so the
-    server renders a dark card with a spinner.
--   **`globals.css` is an entry, not a stylesheet.** It imports seven
-    files from `app/styles/` and defines nothing itself. Adding a new
-    concern, such as a future print-styles layer, means adding one file
-    and one `@import`, with no component changes. One caveat: Tailwind
-    v4 processes `@theme` in an imported file, so the split works today,
-    but a future Tailwind upgrade should re-verify that.
--   **`GITHUB_REPO_URL` is a single source of truth.** Both the header
-    link and `metadata.other.repository` read from `lib/constants.ts`. A
-    fork updates one line, and everything, including the link
-    `aria-label` context, stays consistent.
--   **`ValidationError` is a class, not a tagged union.** This keeps the
-    API route's `err instanceof ValidationError` check simple, but it
-    means a future streaming or structured-error API would need to
-    change the response shape, not just the validation module. That is
-    acceptable for the current scope.
-
-------------------------------------------------------------------------
+- **`MAX_POINTS = 25`.** A safety cap, so one request doesn't block the server for long. At the default config it finishes in roughly half a second.
+- **Synchronous API.** The route blocks the Node event loop while `solveGA` runs. That is fine at this size. Moving to a worker or queue would be a server-side change only, because the client is already async.
+- **No cancel button.** `reset()` cancels implicitly whenever points or config change, and runs are short.
+- **No component or hook tests.** See [Testing](#testing).
+- **The map remounts on reset and preset load** (`key={mapKey}`). That is simpler than calling `fitBounds` imperatively after state changes, and `MapContainer` reuses its DOM node, so the cost is small.
+- **No server rendering for the map.** `MapViewWrapper` uses `dynamic(..., { ssr: false })`, so the server sends a dark placeholder with a spinner.
+- **`ValidationError` is a class, not a tagged union.** That keeps `err instanceof ValidationError` simple in the route. A future streaming or structured-error API would need a different response shape.
+- **Two type systems.** TypeScript and Python types are maintained by hand and checked by the cross-validation tests (see [Type contracts](#type-contracts)).
+- **The Python package is a library, not a service.** There is no FastAPI app and no separate deployment. If the web UI ever needs a live Python solver, a service would be built on top of the package.
 
 ## Dependency map
 
-Who imports what. Read top-to-bottom: each row imports only from rows
-below it.
+Each entry imports only from entries below it. This is a summary, not a full listing.
 
-``` text
+```text
 app/page.tsx
- ├── components/control/ControlPanel.tsx
- ├── components/layout/Header.tsx
- ├── components/layout/MobileTabBar.tsx
- ├── components/map/{MapHUD, MapLoadingOverlay, MapViewWrapper}.tsx
- ├── components/results/ResultsPanel.tsx
+ ├── components/{control, layout, map, results}/*
  ├── hooks/{useOptimize, useDynamicTitle, useKeyboardShortcut}.ts
- ├── lib/{constants, points, presets, types, utils}.ts
- └── (transitively: all lib modules)
+ └── lib/{constants, points, presets, types, utils}.ts
 
 app/layout.tsx
- ├── lib/constants.ts (GITHUB_REPO_URL for metadata)
- ├── app/globals.css (entry — imports app/styles/*)
- └── (Next.js: font loaders, Metadata type)
+ ├── lib/constants.ts          (GITHUB_REPO_URL for metadata)
+ └── app/globals.css           (imports app/styles/*)
 
-app/globals.css
- └── app/styles/{tokens, keyframes, base, leaflet, markers, slider, a11y}.css
+components/control/ControlPanel.tsx → components/ui/*, lib/points.ts, lib/types.ts
+components/layout/Header.tsx        → StatusPill.tsx, lib/constants.ts
+components/map/MapView.tsx          → FitBoundsOnce, MapClickHandler, RoutePolyline,
+                                      StopMarker, useStopNumbers, lib/types.ts
+components/results/ResultsPanel.tsx → ConvergenceSparkline, ImprovementBanner,
+                                      MetricCard, RouteToggle, SequenceDisplay,
+                                      lib/format.ts, lib/types.ts
+components/results/ConvergenceSparkline.tsx → sparkline-geometry.ts (pure math, no React)
 
-components/control/ControlPanel.tsx
- ├── components/control/{ErrorBanner, GAParameterSliders, OptimizeCta,
- │     PointList, PointModeSelector, PresetSelector}.tsx
- ├── components/ui/{Button, Section}.tsx
- ├── lib/points.ts
- └── lib/types.ts
+hooks/useOptimize.ts → lib/types.ts
 
-components/layout/Header.tsx
- ├── components/layout/StatusPill.tsx
- └── lib/constants.ts (GITHUB_REPO_URL)
+app/api/optimize/route.ts → lib/{distance, ga, nearest-neighbor, validation, types}.ts
+                            (no React, no components, no hooks)
 
-components/layout/StatusPill.tsx
- └── (no internal imports — pure presentational)
-
-components/map/MapView.tsx
- ├── components/map/{FitBoundsOnce, MapClickHandler, RoutePolyline, StopMarker}.tsx
- ├── components/map/useStopNumbers.ts
- └── lib/types.ts
-
-components/results/ResultsPanel.tsx
- ├── components/results/{ConvergenceSparkline, ImprovementBanner,
- │     MetricCard, RouteToggle, SequenceDisplay}.tsx
- ├── components/ui/Section.tsx
- ├── lib/format.ts
- └── lib/types.ts
-
-components/results/ConvergenceSparkline.tsx
- ├── components/results/sparkline-geometry.ts
- └── lib/types.ts
-
-components/results/sparkline-geometry.ts
- └── lib/types.ts (types only — pure math, no React)
-
-hooks/useOptimize.ts
- └── lib/types.ts
-
-app/api/optimize/route.ts
- ├── lib/{distance, ga, nearest-neighbor, validation, types}.ts
- └── (no React, no components, no hooks)
-
-tests/*.test.ts
- └── lib/*.ts (all pure modules)
+tests/*.test.ts → lib/*.ts
 ```
 
-**No cycles.** This is enforced by review, not by tooling. If you ever
-need to add a dependency that would create a cycle, that is the signal
-that a shared type belongs in `lib/types.ts` or a shared util needs its
-own file.
+There are no import cycles. This is enforced by review, not by tooling. If a change would create one, a shared type probably belongs in `lib/types.ts`, or a shared helper needs its own file.
 
-**Structural invariant:** no file inside `lib/`, except `utils.ts`,
-imports React. That is what makes the entire algorithm layer portable to
-Node, browsers, workers, and tests without special transpilation.
+Two invariants to keep:
 
-**Structural invariant:** `lib/validation/index.ts` is the only file in
-`lib/validation/` that consumers import directly. `error.ts`,
-`primitives.ts`, `fields.ts`, and `request.ts` are internal. Adding a
-fourth internal file or renaming one is invisible outside the directory.
+- No file in `lib/` except `utils.ts` imports React. That keeps the algorithm usable from Node, workers and tests.
+- Outside `lib/validation/`, only `index.ts` is imported. Adding or renaming an internal file there changes nothing for consumers.
