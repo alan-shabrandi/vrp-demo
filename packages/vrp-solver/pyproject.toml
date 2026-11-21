@@ -1,0 +1,80 @@
+[project]
+name = "vrp-solver"
+version = "0.1.1"
+description = "A standalone Python implementation of a Genetic Algorithm for the Vehicle Routing Problem (open VRP, fixed start/end points)."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "Alan Shabrandi", email = "alan.shabrandi@gmail.com" }
+]
+keywords = [
+    "vrp",
+    "vehicle-routing",
+    "genetic-algorithm",
+    "optimization",
+    "haversine",
+    "metaheuristics",
+]
+classifiers = [
+    "Development Status :: 3 - Alpha",
+    "Intended Audience :: Science/Research",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = [
+    "pydantic>=2.0",
+    "typer>=0.9.0",
+]
+
+[project.scripts]
+vrp-solver = "vrp_solver.cli:app"
+
+[project.urls]
+Homepage = "https://vrp-demo-phi.vercel.app"
+Repository = "https://github.com/alan-shabrandi/vrp-demo"
+"Bug Tracker" = "https://github.com/alan-shabrandi/vrp-demo/issues"
+"Web Demo" = "https://vrp-demo-phi.vercel.app"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "pytest>=8.0",
+    "ruff>=0.3.0",
+    "mypy>=1.8",
+    "build>=1.2",
+    "twine>=5.0",
+]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "N", "UP", "B", "C4", "SIM"]
+
+[tool.ruff.lint.per-file-ignores]
+# JSON contract fields are camelCase to match the TypeScript API; keep them that way.
+"src/vrp_solver/validation.py" = ["N815"]
+"src/vrp_solver/types.py" = ["N815"]
+# Test helpers legitimately use dict() for **kwargs spreading.
+"tests/*.py" = ["C408"]
+# Typer requires Argument()/Option() calls in argument defaults.
+"src/vrp_solver/cli.py" = ["B008"]
+
+[tool.mypy]
+python_version = "3.10"
+strict = true
+ignore_missing_imports = true

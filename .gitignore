@@ -45,4 +45,46 @@ yarn-error.log*
 
 # generated artifacts
 /repomix-output.md
+/repomix.config.json
 /project-structure.txt
+
+# ==============================
+# Python package (packages/vrp-solver/)
+# ==============================
+
+# Bytecode / compiled
+__pycache__/
+*.py[cod]
+*$py.class
+
+# Virtual environments
+.venv/
+venv/
+env/
+ENV/
+
+# Distribution / build outputs
+*.egg-info/
+build/
+dist/
+*.whl
+*.tar.gz
+
+# Test / tool caches
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/
+.coverage
+.coverage.*
+htmlcov/
+
+# Local scratch files used during development
+packages/vrp-solver/test_input.json
+packages/vrp-solver/problem.json
+
+# ==============================
+# DO NOT IGNORE (for clarity — kept out of the ignore list on purpose)
+# ==============================
+# uv.lock                      ← this is the lockfile, must be committed
+# pyproject.toml               ← package definition
+# .python-version              ← if you generate one with `uv python pin`, commit it

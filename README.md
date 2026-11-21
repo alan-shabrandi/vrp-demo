@@ -2,14 +2,20 @@
 
 A browser-based **Vehicle Routing Problem (VRP)** solver built around a **Genetic Algorithm (GA)**. Place points on a dark cartographic map, tune the algorithm's parameters live, and compare the evolved route against a greedy nearest-neighbor baseline.
 
-This project started as my B.Sc. thesis in Geomatics Engineering (GIS), where the algorithm was originally written in Python and C++. The goal of this version isn't to extend that research — it's to make the algorithm something you can explore and verify for yourself.
+This project started as my B.Sc. thesis in Geomatics Engineering (GIS), where the algorithm was originally written in Python. The goal of this version isn't to extend that research — it's to make the algorithm something you can explore and verify for yourself.
 
 <p align="center">
   <a href="https://github.com/alan-shabrandi/vrp-demo/actions/workflows/ci.yml">
-    <img src="https://github.com/alan-shabrandi/vrp-demo/actions/workflows/ci.yml/badge.svg" alt="CI status" />
+    <img src="https://github.com/alan-shabrandi/vrp-demo/actions/workflows/ci.yml/badge.svg" alt="Next.js CI status" />
+  </a>
+  <a href="https://github.com/alan-shabrandi/vrp-demo/actions/workflows/python-solver.yml">
+    <img src="https://github.com/alan-shabrandi/vrp-demo/actions/workflows/python-solver.yml/badge.svg" alt="Python CI status" />
   </a>
   <a href="#testing">
-    <img src="https://img.shields.io/badge/tests-81%20passing-brightgreen" alt="81 tests passing" />
+    <img src="https://img.shields.io/badge/tests-81%20%2B%2036%20passing-brightgreen" alt="81 + 36 tests passing" />
+  </a>
+  <a href="https://pypi.org/project/vrp-solver/">
+    <img src="https://img.shields.io/pypi/v/vrp-solver.svg" alt="PyPI version" />
   </a>
   <a href="./LICENSE">
     <img src="https://img.shields.io/badge/License-MIT-blue.svg" alt="MIT License" />
@@ -19,14 +25,21 @@ This project started as my B.Sc. thesis in Geomatics Engineering (GIS), where th
 <p align="center">
   <a href="https://vrp-demo-phi.vercel.app"><strong>Live demo</strong></a>
   &nbsp;·&nbsp;
-  <strong>Original thesis:</strong> <em>PDF link to be added</em>
+  <a href="https://pypi.org/project/vrp-solver/"><strong>PyPI package</strong></a>
 </p>
 
 <p align="center">
-  <strong>Stack:</strong> Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Leaflet · Vitest
+  <strong>Web stack:</strong> Next.js 16 · React 19 · TypeScript · Tailwind CSS v4 · Leaflet · Vitest<br/>
+  <strong>Python package:</strong> Pydantic · Typer · pytest · uv · published on PyPI
 </p>
 
 ![Application screenshot](./docs/screenshot.png)
+
+> **Note on the algorithm**
+>
+> This web demo reimplements my BSc thesis Genetic Algorithm in TypeScript for interactive visualization. The same algorithm is also available as a standalone, installable Python package — **[`vrp-solver`](https://pypi.org/project/vrp-solver/)** — with 36 tests, full Pydantic validation, a CLI, and **bit-exact cross-validation** against the TypeScript implementation (same seed → same route).
+>
+> For a full history of the project across its three versions (thesis → web → package), see [`docs/PROVENANCE.md`](./docs/PROVENANCE.md).
 
 ## Table of contents
 
@@ -54,6 +67,8 @@ This project started as my B.Sc. thesis in Geomatics Engineering (GIS), where th
 - See the browser tab title update live as the improvement lands (for example, `VRP Solver · 11.1% better`).
 - Open the repository from the GitHub icon in the header; the same repository URL is also embedded in the page metadata.
 
+The same algorithm is also available as a **standalone Python package** on PyPI. See the [`vrp-solver` README](./packages/vrp-solver/README.md) for the CLI and Python API.
+
 ## Algorithm
 
 The problem is modeled as an **open VRP with fixed start and end points**.
@@ -67,6 +82,8 @@ The problem is modeled as an **open VRP with fixed start and end points**.
 - **Fitness:** Total haversine distance, or total travel time at a constant speed of 40 km/h.
 
 The solver returns a `history` object containing `best` and `average` fitness per generation. This data drives both the convergence analysis and the sparkline in the UI.
+
+The exact same algorithm is implemented in Python under `packages/vrp-solver/`. The `mulberry32` PRNG, the OX crossover, the fitness evaluation, and the GA pipeline are all ported bit-for-bit, and a **golden cross-validation test** (`packages/vrp-solver/tests/test_cross_validation.py`) asserts that both versions produce identical routes, fitness values, and histories for a fixed seed.
 
 ### What this demo is not
 
@@ -117,6 +134,8 @@ The visual direction is what I'd call **Cartographic Dark**: it reads more like 
 
 ## Tech stack
 
+### Web
+
 | Technology | Purpose |
 | --- | --- |
 | **Next.js 16** | App Router; `"use client"` is limited to components that need interactivity. |
@@ -128,59 +147,94 @@ The visual direction is what I'd call **Cartographic Dark**: it reads more like 
 | **Vitest** | Tests for the algorithm and pure helper functions. |
 | **Prettier / ESLint** | Formatting and linting, enforced in CI. |
 
+### Python package (`packages/vrp-solver/`)
+
+| Technology | Purpose |
+| --- | --- |
+| **Python 3.10+** | Runtime for the standalone solver. |
+| **Pydantic v2** | Input validation and typed schemas. |
+| **Typer** | CLI entry point. |
+| **uv** | Package and environment management. |
+| **pytest** | Test suite (36 tests, including cross-validation against the TypeScript version). |
+| **ruff / mypy** | Linting, formatting, and strict type checking, enforced in CI. |
+| **hatchling** | Build backend; distribution on PyPI. |
+
 ## Project structure
 
 ```text
-src/
-├── app/
-│   ├── api/optimize/route.ts       POST /api/optimize — thin HTTP wrapper
-│   ├── styles/                     One file per concern, imported by globals.css
-│   │   ├── tokens.css              @theme tokens (colors, fonts, radii, animations)
-│   │   ├── keyframes.css           All @keyframes (pulse-ring, fade-in, slide-up,
-│   │   │                           shimmer, sparkline-draw)
-│   │   ├── base.css                html/body defaults, grid texture, scrollbars, focus
-│   │   ├── leaflet.css             Leaflet container, controls, popup dark theme
-│   │   ├── markers.css             .vrp-marker* + .route-line
-│   │   ├── slider.css              .slider + --slider-progress
-│   │   └── a11y.css                prefers-reduced-motion override
-│   ├── globals.css                 Entry point — imports the styles/ files
-│   ├── layout.tsx                  Fonts, metadata, root shell
-│   └── page.tsx                    State owner + composition (~155 lines)
+vrp-demo/
+├── src/                                  ← Next.js web app
+│   ├── app/
+│   │   ├── api/optimize/route.ts         POST /api/optimize — thin HTTP wrapper
+│   │   ├── styles/                       One file per concern, imported by globals.css
+│   │   │   ├── tokens.css                @theme tokens (colors, fonts, radii, animations)
+│   │   │   ├── keyframes.css             All @keyframes
+│   │   │   ├── base.css                  html/body defaults, grid texture, scrollbars, focus
+│   │   │   ├── leaflet.css               Leaflet container, controls, popup dark theme
+│   │   │   ├── markers.css               .vrp-marker* + .route-line
+│   │   │   ├── slider.css                .slider + --slider-progress
+│   │   │   └── a11y.css                  prefers-reduced-motion override
+│   │   ├── globals.css                   Entry point — imports the styles/ files
+│   │   ├── layout.tsx                    Fonts, metadata, root shell
+│   │   └── page.tsx                      State owner + composition (~155 lines)
+│   │
+│   ├── components/
+│   │   ├── control/                      ControlPanel + 7 sub-components
+│   │   ├── layout/                       Header + StatusPill + MobileTabBar
+│   │   ├── map/                          MapView + 10 sub-components
+│   │   ├── results/                      ResultsPanel + 5 sub-components + sparkline-geometry.ts
+│   │   └── ui/                           Button, Section, Slider, Spinner
+│   │
+│   ├── hooks/
+│   │   ├── useDynamicTitle.ts            document.title sync
+│   │   ├── useKeyboardShortcut.ts        Generic keybinding
+│   │   └── useOptimize.ts                Fetch lifecycle + AbortController
+│   │
+│   └── lib/                              ← TS algorithm implementation
+│       ├── constants.ts                  Runtime constants (bounds, defaults, physics)
+│       ├── types.ts                      Type contracts (no runtime values)
+│       ├── validation/                   Request parsing + domain invariants
+│       │   ├── index.ts                  Public facade
+│       │   ├── error.ts                  ValidationError class
+│       │   ├── primitives.ts             isObject, asNumber, asIntInRange, guards
+│       │   ├── fields.ts                 parsePoint + parseConfig
+│       │   └── request.ts                parseOptimizeRequest + requireStartAndEnd
+│       ├── distance.ts                   Haversine + route evaluation
+│       ├── operators.ts                  OX, swap, tournament (pure, testable)
+│       ├── rng.ts                        Mulberry32 + shuffle
+│       ├── ga.ts                         Genetic algorithm
+│       ├── nearest-neighbor.ts           Greedy baseline
+│       ├── presets.ts                    INITIAL_POINTS + PRESETS
+│       ├── points.ts                     summarizePointSet + placePoint
+│       ├── format.ts                     formatDistance, formatTime
+│       ├── role-meta.ts                  Point role → colors
+│       └── utils.ts                      cn() (clsx + tailwind-merge)
 │
-├── components/
-│   ├── control/                    ControlPanel + 7 sub-components
-│   ├── layout/                     Header + StatusPill + MobileTabBar
-│   ├── map/                        MapView + 10 sub-components
-│   ├── results/                    ResultsPanel + 5 sub-components + sparkline-geometry.ts
-│   └── ui/                          Button, Section, Slider, Spinner
+├── tests/                                ← 81 Vitest tests across 7 files
 │
-├── hooks/
-│   ├── useDynamicTitle.ts           document.title sync
-│   ├── useKeyboardShortcut.ts      Generic keybinding
-│   └── useOptimize.ts              Fetch lifecycle + AbortController
+├── packages/vrp-solver/                  ← Python package (published on PyPI)
+│   ├── src/vrp_solver/
+│   │   ├── distance.py                   Haversine + route evaluation
+│   │   ├── operators.py                  OX, swap, tournament
+│   │   ├── ga.py                         Genetic algorithm
+│   │   ├── nearest_neighbor.py           Greedy baseline
+│   │   ├── rng.py                        Mulberry32 (bit-exact port from TS)
+│   │   ├── validation.py                 Pydantic schemas
+│   │   ├── types.py                      Dataclasses
+│   │   ├── constants.py                  Runtime constants
+│   │   ├── cli.py                        Typer CLI
+│   │   └── __init__.py                   Public API
+│   ├── tests/                            ← 36 pytest tests (incl. cross-validation)
+│   ├── pyproject.toml
+│   └── README.md
 │
-└── lib/
-    ├── constants.ts                Runtime constants (bounds, defaults, physics, GITHUB_REPO_URL)
-    ├── types.ts                    Type contracts (no runtime values)
-    ├── validation/                 Request parsing + domain invariants
-    │   ├── index.ts                Public facade — ValidationError, parseOptimizeRequest,
-    │   │                           requireStartAndEnd
-    │   ├── error.ts                ValidationError class
-    │   ├── primitives.ts           isObject, asNumber, asIntInRange, role/objective guards
-    │   ├── fields.ts               parsePoint + parseConfig
-    │   └── request.ts               parseOptimizeRequest + requireStartAndEnd
-    ├── distance.ts                 Haversine + route evaluation
-    ├── operators.ts                OX, swap, tournament (pure, testable)
-    ├── rng.ts                      Mulberry32 + shuffle
-    ├── ga.ts                       Genetic algorithm
-    ├── nearest-neighbor.ts         Greedy baseline
-    ├── presets.ts                  INITIAL_POINTS + PRESETS
-    ├── points.ts                   summarizePointSet + placePoint
-    ├── format.ts                   formatDistance, formatTime
-    ├── role-meta.ts                Point role → colors
-    └── utils.ts                    cn() (clsx + tailwind-merge)
-
-tests/                              81 tests across 7 files
+├── docs/
+│   ├── screenshot.png
+│   └── PROVENANCE.md                     ← Project lineage (thesis → web → package)
+│
+└── .github/workflows/
+    ├── ci.yml                            ← Next.js CI
+    └── python-solver.yml                 ← Python CI
 ```
 
 ### Architectural boundaries
@@ -192,10 +246,13 @@ The codebase follows these rules:
 - `app/api/*` never imports from `components/*`.
 - `components/*` never imports from `app/api/*`. The UI communicates through HTTP.
 - `app/page.tsx` is the only application state holder. Each child is either fully controlled or owns only Leaflet's internal state.
+- `packages/vrp-solver/` is a self-contained Python package. It has no dependency on the web app, and the web app has no dependency on it. The link between them is the cross-validation test, which guarantees algorithmic parity.
 
 The full layer model is documented in [`ARCHITECTURE.md`](./ARCHITECTURE.md).
 
 ## Getting started
+
+### Web app
 
 ```bash
 npm install
@@ -206,7 +263,25 @@ Open [http://localhost:3000](http://localhost:3000).
 
 The page loads with two fixed points (Start at Azadi Square and End at Tajrish) and no route. Load a preset, click the map to add stops, then select **Optimize route** (or press <kbd>Ctrl</kbd>/<kbd>⌘</kbd> + <kbd>Enter</kbd>).
 
-### Available scripts
+### Python package
+
+The published package:
+
+```bash
+pip install vrp-solver
+```
+
+To work on it locally:
+
+```bash
+cd packages/vrp-solver
+uv sync
+uv run pytest -v
+```
+
+See [`packages/vrp-solver/README.md`](./packages/vrp-solver/README.md) for the CLI and Python API.
+
+### Available scripts (web)
 
 | Command | Description |
 | --- | --- |
@@ -221,7 +296,24 @@ The page loads with two fixed points (Start at Azadi Square and End at Tajrish) 
 | `npm run test:watch` | Run tests in watch mode. |
 | `npm run ci` | Run the full local pipeline: `typecheck → lint → format:check → test → build`. |
 
+### Available scripts (Python package)
+
+Run these from `packages/vrp-solver/`:
+
+| Command | Description |
+| --- | --- |
+| `uv sync` | Install dependencies. |
+| `uv run pytest -v` | Run the Python test suite. |
+| `uv run ruff check src/ tests/` | Lint. |
+| `uv run ruff format --check src/ tests/` | Check formatting. |
+| `uv run mypy src/` | Type check (strict mode). |
+| `uv run vrp-solver problem.json` | Run the CLI. |
+| `uv run python -m build` | Build distribution files (`.whl` + `.tar.gz`). |
+| `uv run twine check dist/*` | Validate the distribution files before publishing. |
+
 ## Testing
+
+### Web app (Vitest)
 
 Run the test suite once:
 
@@ -246,6 +338,26 @@ The suite contains **81 tests across 7 files**:
 - `nearest-neighbor.test.ts` — Sequence validity and determinism.
 
 > **Deliberately not tested:** Hooks (`useOptimize` and related hooks) and React components are covered manually. Adding `jsdom` and `@testing-library/react` would increase the dependency surface for limited additional value in a demo. Two pure helpers added during a recent refactor — `placePoint` in `lib/points.ts` and `computeSparklineGeometry` in `components/results/sparkline-geometry.ts` — are candidates for follow-up tests; both are small and side-effect-free.
+
+### Python package (pytest)
+
+Run from `packages/vrp-solver/`:
+
+```bash
+uv run pytest -v
+```
+
+The suite contains **36 tests across 7 files**:
+
+- `test_rng.py` — Mulberry32 output matches the TypeScript implementation bit-exactly.
+- `test_distance.py` — Haversine symmetry, accuracy, sequence evaluation, and improvement clamping.
+- `test_operators.py` — OX validity, swap mutation invariants, and tournament selection determinism.
+- `test_ga.py` — GA sequence validity, monotonic history, seed-based determinism, and edge cases.
+- `test_nearest_neighbor.py` — Baseline sequence validity and determinism.
+- `test_validation.py` — Pydantic schemas for happy path and error cases.
+- `test_cross_validation.py` — **Golden tests**: same seed → identical routes, fitness, and history as the TypeScript version.
+
+> **The cross-validation tests are the load-bearing part of this repo.** They are what makes the claim "the Python and TypeScript versions implement the same algorithm" verifiable rather than aspirational. If you change the algorithm in either language, update the golden vectors and re-run both suites.
 
 ## API
 
@@ -300,6 +412,16 @@ The suite contains **81 tests across 7 files**:
 
 Inputs are validated against `GA_CONFIG_BOUNDS` and `MIN_POINTS` / `MAX_POINTS` (see `src/lib/constants.ts`). Out-of-bounds values return `400` with `{ "error": "..." }`.
 
+The Python package exposes the same request/response shape, so you can use either implementation without changing the payload.
+
+### Python CLI
+
+```bash
+vrp-solver problem.json
+```
+
+The input is the same JSON shape as the HTTP API. The output is the full `OptimizeResponse` printed to stdout.
+
 ## Design decisions worth noting
 
 Some of these decisions are load-bearing; others are simply details I'd want explained if I were reading someone else's repository.
@@ -315,10 +437,15 @@ Some of these decisions are load-bearing; others are simply details I'd want exp
 - **Esri Dark Gray for the basemap.** It requires no API key and pairs naturally with the app's dark palette. CartoDB Dark Matter was used initially but was replaced when it began requiring an API key.
 - **`globals.css` is an entry point, not a dumping ground.** Tokens, keyframes, base styles, Leaflet overrides, and component styles each live in `src/app/styles/*.css` and are imported there. Adding a concern means adding a file and an import without modifying an existing component.
 - **`GITHUB_REPO_URL` lives in `lib/constants.ts`.** The header link and the `metadata.other.repository` tag use the same constant, so a fork only needs to change one line.
+- **The Python package is a sibling, not a dependency.** The web app and `vrp-solver` do not import each other. They are connected only by the cross-validation test, which is the right level of coupling: it proves parity without creating a runtime dependency.
+- **`mulberry32` is ported verbatim.** The Python RNG is an 8-line port of the TypeScript one. This is what makes bit-exact cross-validation possible, and it is why the golden tests can compare exact floating-point values rather than using a tolerance.
+- **Pydantic for validation.** The web app validates with hand-written TS guards; the Python package validates with Pydantic schemas. Both produce the same JSON-level error semantics (400 with `{ "error": "..." }`), even though the implementation language differs.
 
 ## Deploy
 
-This is a standard Next.js project with no external services. Vercel works with zero additional configuration:
+### Web app
+
+This is a standard Next.js project with no external services for the web side. Vercel works with zero additional configuration:
 
 ```bash
 vercel
@@ -332,6 +459,22 @@ npm start
 ```
 
 No environment variables are required.
+
+### Python package (PyPI)
+
+Published from the same repo. To publish a new version:
+
+```bash
+cd packages/vrp-solver
+# Bump the version in pyproject.toml
+uv sync
+uv run pytest -v                       # verify the suite passes
+uv run python -m build                  # creates .whl and .tar.gz
+uv run twine check dist/*              # validate before upload
+uv run twine upload dist/*             # requires a PyPI API token
+```
+
+The CI workflow `.github/workflows/python-solver.yml` runs the same lint, typecheck, and test steps on every push that touches `packages/vrp-solver/`.
 
 ## License
 
